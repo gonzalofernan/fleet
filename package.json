@@ -1,0 +1,23 @@
+{
+  "name": "fleet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local, terminal-first control plane for coding agents.",
+  "type": "module",
+  "bin": {
+    "fleet": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test dist/**/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}
+
