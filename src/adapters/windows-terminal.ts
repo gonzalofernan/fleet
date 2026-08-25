@@ -62,8 +62,7 @@ function escapePowerShell(value: string): string {
 }
 
 export function buildCaptainTerminalArgs(request: CaptainRequest): string[] {
-  const prompt = Buffer.from(request.prompt, "utf8").toString("base64");
-  const command = `& '${escapePowerShell(process.execPath)}' '${escapePowerShell(request.fleetCliPath)}' captain-host --codex-path '${escapePowerShell(request.codexPath)}' --model '${escapePowerShell(request.model)}' --working-directory '${escapePowerShell(request.workingDirectory)}' --database-path '${escapePowerShell(request.databasePath)}' --prompt-base64 '${prompt}'`;
+  const command = `Clear-Host; & '${escapePowerShell(request.codexPath)}' -m '${escapePowerShell(request.model)}' -s danger-full-access -a never -C '${escapePowerShell(request.workingDirectory)}' '${escapePowerShell(request.prompt)}'`;
   return [
     "-w", "fleet",
     "new-tab",

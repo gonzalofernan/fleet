@@ -26,8 +26,9 @@ test("builds an interactive Codex captain terminal", () => {
   });
 
   assert.equal(args[4], "FLEET | Captain");
-  assert.ok(args.at(-1)?.includes("captain-host"));
-  assert.ok(args.at(-1)?.includes("--codex-path"));
-  assert.ok(args.at(-1)?.includes("--database-path"));
-  assert.ok(args.at(-1)?.includes("--prompt-base64"));
+  assert.ok(args.at(-1)?.includes("codex.cmd"));
+  assert.ok(args.at(-1)?.includes("-s danger-full-access"));
+  assert.ok(args.at(-1)?.includes("-m 'gpt-5.6-luna'"));
+  assert.ok(args.at(-1)?.includes("-a never"));
+  assert.ok(args.at(-1)?.includes("Welcome to Fleet"));
 });
