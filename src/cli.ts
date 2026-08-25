@@ -110,7 +110,7 @@ function execute(command: string[]): object | string {
       databasePath: required(option(command, "--database-path"), "--database-path"),
       prompt: Buffer.from(required(option(command, "--prompt-base64"), "--prompt-base64"), "base64").toString("utf8"),
     });
-    return { status: "host-started" };
+    return "";
   }
   if (command[0] === "captain") {
     new FleetService(store).launchCaptain(process.cwd());

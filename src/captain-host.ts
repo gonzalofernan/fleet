@@ -67,7 +67,7 @@ function createCaptainPty(options: CaptainHostOptions): CaptainPty {
 }
 
 export function buildCodexCommand(options: CaptainHostOptions): string {
-  return `& '${escapePowerShell(options.codexPath)}' -m '${escapePowerShell(options.model)}' -s danger-full-access -a never --no-alt-screen -C '${escapePowerShell(options.workingDirectory)}' '${escapePowerShell(options.prompt)}'`;
+  return `& '${escapePowerShell(options.codexPath)}' -m '${escapePowerShell(options.model)}' -s danger-full-access -a never -C '${escapePowerShell(options.workingDirectory)}' '${escapePowerShell(options.prompt)}'`;
 }
 
 function escapePowerShell(value: string): string {
