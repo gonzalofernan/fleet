@@ -47,9 +47,8 @@ Fleet begins as a modular monolith. Adapters are process-local interfaces, not n
 
 ## Milestones
 
-1. Persistent project/task/agent registry.
-2. Git worktree and Windows Terminal adapters.
+1. Persistent project/task/agent registry. Complete.
+2. Git worktree and Windows Terminal adapters. Complete.
 3. Codex CLI adapter with a single worker concurrency limit.
 4. Pull request lifecycle and review task type.
 5. Loops, resource policies, and a terminal UI.
-

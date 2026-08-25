@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
+import { renderDashboard } from "./dashboard.js";
+import { FleetService } from "./service.js";
 import { defaultDatabasePath, FleetStore } from "./storage.js";
 
 const [, , ...args] = process.argv;
@@ -7,7 +9,7 @@ const store = new FleetStore(process.env.FLEET_DB ?? defaultDatabasePath(process
 
 try {
   const result = execute(args);
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.stdout.write(typeof result === "string" ? result : `${JSON.stringify(result, null, 2)}\n`);
 } catch (error) {
   process.stderr.write(`fleet: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
@@ -15,13 +17,15 @@ try {
   store.close();
 }
 
-function execute(command: string[]): object {
+function execute(command: string[]): object | string {
   if (command.length === 0 || command[0] === "help" || command[0] === "--help") {
     return {
       usage: [
         "fleet project add <name> --path <repository-path>",
         "fleet task create --project <project-id> --title <title>",
         "fleet agent request --task <task-id> --role <role> [--provider codex]",
+        "fleet agent launch <agent-id>",
+        "fleet dashboard",
         "fleet status",
       ],
     };
@@ -41,9 +45,14 @@ function execute(command: string[]): object {
       option(command, "--provider") ?? "codex",
     );
   }
+  if (command[0] === "agent" && command[1] === "launch") {
+    return new FleetService(store).launchAgent(required(command[2], "agent id"));
+  }
   if (command[0] === "status") {
+    if (command[1] === "--view") return renderDashboard(store.snapshot());
     return store.snapshot();
   }
+  if (command[0] === "dashboard") return renderDashboard(store.snapshot());
   throw new Error(`Unknown command: ${command.join(" ")}`);
 }
 
@@ -56,4 +65,3 @@ function required(value: string | undefined, label: string): string {
   if (!value || value.startsWith("--")) throw new Error(`Missing ${label}`);
   return value;
 }
-

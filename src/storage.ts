@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Agent, FleetSnapshot, Project, Task } from "./domain.js";
+import type { Agent, AgentContext, AgentStatus, FleetSnapshot, Project, Task } from "./domain.js";
 
 export class FleetStore {
   private readonly database: DatabaseSync;
@@ -31,6 +31,9 @@ export class FleetStore {
         role TEXT NOT NULL,
         provider TEXT NOT NULL,
         status TEXT NOT NULL,
+        branch TEXT,
+        worktree_path TEXT,
+        terminal_title TEXT,
         created_at TEXT NOT NULL
       ) STRICT;
       CREATE TABLE IF NOT EXISTS events (
@@ -42,6 +45,9 @@ export class FleetStore {
         created_at TEXT NOT NULL
       ) STRICT;
     `);
+    this.addColumnIfMissing("agents", "branch", "TEXT");
+    this.addColumnIfMissing("agents", "worktree_path", "TEXT");
+    this.addColumnIfMissing("agents", "terminal_title", "TEXT");
   }
 
   addProject(name: string, rootPath: string): Project {
@@ -71,11 +77,14 @@ export class FleetStore {
       role,
       provider,
       status: "requested",
+      branch: null,
+      worktreePath: null,
+      terminalTitle: null,
       createdAt: now(),
     };
     this.database.prepare(
-      "INSERT INTO agents (id, task_id, role, provider, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    ).run(agent.id, agent.taskId, agent.role, agent.provider, agent.status, agent.createdAt);
+      "INSERT INTO agents (id, task_id, role, provider, status, branch, worktree_path, terminal_title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(agent.id, agent.taskId, agent.role, agent.provider, agent.status, agent.branch, agent.worktreePath, agent.terminalTitle, agent.createdAt);
     this.addEvent("agent", agent.id, "requested", { taskId, role, provider });
     return agent;
   }
@@ -84,8 +93,55 @@ export class FleetStore {
     return {
       projects: this.database.prepare("SELECT id, name, root_path AS rootPath, created_at AS createdAt FROM projects ORDER BY created_at").all() as unknown as Project[],
       tasks: this.database.prepare("SELECT id, project_id AS projectId, title, status, created_at AS createdAt FROM tasks ORDER BY created_at").all() as unknown as Task[],
-      agents: this.database.prepare("SELECT id, task_id AS taskId, role, provider, status, created_at AS createdAt FROM agents ORDER BY created_at").all() as unknown as Agent[],
+      agents: this.database.prepare("SELECT id, task_id AS taskId, role, provider, status, branch, worktree_path AS worktreePath, terminal_title AS terminalTitle, created_at AS createdAt FROM agents ORDER BY created_at").all() as unknown as Agent[],
     };
+  }
+
+  getAgentContext(agentId: string): AgentContext {
+    const row = this.database.prepare(`
+      SELECT
+        a.id AS agentId, a.task_id AS agentTaskId, a.role AS agentRole, a.provider AS agentProvider,
+        a.status AS agentStatus, a.branch AS agentBranch, a.worktree_path AS agentWorktreePath,
+        a.terminal_title AS agentTerminalTitle, a.created_at AS agentCreatedAt,
+        t.id AS taskId, t.project_id AS taskProjectId, t.title AS taskTitle, t.status AS taskStatus,
+        t.created_at AS taskCreatedAt,
+        p.id AS projectId, p.name AS projectName, p.root_path AS projectRootPath, p.created_at AS projectCreatedAt
+      FROM agents a
+      JOIN tasks t ON t.id = a.task_id
+      JOIN projects p ON p.id = t.project_id
+      WHERE a.id = ?
+    `).get(agentId) as Record<string, string | null> | undefined;
+    if (!row) throw new Error(`Unknown agent: ${agentId}`);
+    return {
+      agent: {
+        id: requiredRow(row, "agentId"), taskId: requiredRow(row, "agentTaskId"), role: requiredRow(row, "agentRole"),
+        provider: requiredRow(row, "agentProvider"), status: requiredRow(row, "agentStatus") as AgentStatus,
+        branch: row.agentBranch, worktreePath: row.agentWorktreePath, terminalTitle: row.agentTerminalTitle,
+        createdAt: requiredRow(row, "agentCreatedAt"),
+      },
+      task: {
+        id: requiredRow(row, "taskId"), projectId: requiredRow(row, "taskProjectId"), title: requiredRow(row, "taskTitle"),
+        status: requiredRow(row, "taskStatus") as Task["status"], createdAt: requiredRow(row, "taskCreatedAt"),
+      },
+      project: {
+        id: requiredRow(row, "projectId"), name: requiredRow(row, "projectName"), rootPath: requiredRow(row, "projectRootPath"),
+        createdAt: requiredRow(row, "projectCreatedAt"),
+      },
+    };
+  }
+
+  provisionAgent(agentId: string, details: { branch: string; worktreePath: string; terminalTitle: string }): Agent {
+    const context = this.getAgentContext(agentId);
+    if (context.agent.status !== "requested") {
+      throw new Error(`Agent ${agentId} cannot be launched from ${context.agent.status}`);
+    }
+    this.database.prepare(`
+      UPDATE agents
+      SET status = 'waiting', branch = ?, worktree_path = ?, terminal_title = ?
+      WHERE id = ?
+    `).run(details.branch, details.worktreePath, details.terminalTitle, agentId);
+    this.addEvent("agent", agentId, "provisioned", details);
+    return { ...context.agent, status: "waiting", ...details };
   }
 
   close(): void {
@@ -109,6 +165,13 @@ export class FleetStore {
       "INSERT INTO events (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
     ).run(randomUUID(), entityType, entityId, eventType, JSON.stringify(payload), now());
   }
+
+  private addColumnIfMissing(table: string, column: string, definition: string): void {
+    const columns = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((entry) => entry.name === column)) {
+      this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
 }
 
 export function defaultDatabasePath(cwd: string): string {
@@ -117,4 +180,10 @@ export function defaultDatabasePath(cwd: string): string {
 
 function now(): string {
   return new Date().toISOString();
+}
+
+function requiredRow(row: Record<string, string | null>, key: string): string {
+  const value = row[key];
+  if (value === null || value === undefined) throw new Error(`Database row is missing ${key}`);
+  return value;
 }

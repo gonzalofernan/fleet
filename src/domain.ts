@@ -43,7 +43,16 @@ export interface Agent {
   role: string;
   provider: string;
   status: AgentStatus;
+  branch: string | null;
+  worktreePath: string | null;
+  terminalTitle: string | null;
   createdAt: string;
+}
+
+export interface AgentContext {
+  agent: Agent;
+  task: Task;
+  project: Project;
 }
 
 export interface FleetSnapshot {
@@ -51,4 +60,3 @@ export interface FleetSnapshot {
   tasks: Task[];
   agents: Agent[];
 }
-
