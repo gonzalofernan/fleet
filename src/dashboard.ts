@@ -3,12 +3,13 @@ import type { FleetSnapshot } from "./domain.js";
 export function renderDashboard(snapshot: FleetSnapshot): string {
   const active = snapshot.agents.filter((agent) => ["provisioning", "running", "waiting"].includes(agent.status)).length;
   const unverified = snapshot.agents.filter((agent) => agent.status === "unknown").length;
+  const pending = snapshot.messages.filter((message) => message.requiresHuman && message.status !== "resolved");
   const lines = [
     "",
     "  FLEET CONTROL PLANE",
     "  Local agent registry",
     "",
-    `  Projects  ${snapshot.projects.length}     Tasks  ${snapshot.tasks.length}     Loops  ${snapshot.loops.length}`,
+    `  Projects  ${snapshot.projects.length}     Tasks  ${snapshot.tasks.length}     Loops  ${snapshot.loops.length}     Pending  ${pending.length}`,
     `  Workers   ${active} active     ${unverified} unverified`,
     "  -----------------------------------------------------------------",
   ];
@@ -22,6 +23,14 @@ export function renderDashboard(snapshot: FleetSnapshot): string {
     lines.push("", "  LOOPS");
     for (const loop of snapshot.loops) {
       lines.push(`  ${loop.enabled ? "enabled" : "paused "}     ${loop.title} (${loop.schedule})`);
+    }
+  }
+  if (pending.length > 0) {
+    lines.push("", "  PENDING HUMAN DECISIONS");
+    for (const message of pending) {
+      const source = [message.projectName, message.agentRole, message.taskTitle].filter(Boolean).join(" / ") || "Unattributed agent message";
+      lines.push(`  ${message.priority.padEnd(7)} ${message.status.padEnd(12)} ${source}`);
+      lines.push(`           ${message.text}`);
     }
   }
   lines.push("  -----------------------------------------------------------------", "");

@@ -22,6 +22,12 @@ export const AGENT_STATUSES = [
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
 
+export const MESSAGE_TYPES = ["info", "question", "approval", "blocked", "completed"] as const;
+export const MESSAGE_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
+export type MessageType = (typeof MESSAGE_TYPES)[number];
+export type MessagePriority = (typeof MESSAGE_PRIORITIES)[number];
+export type MessageStatus = "unread" | "delivered" | "acknowledged" | "resolved";
+
 export interface Project {
   id: string;
   name: string;
@@ -66,9 +72,27 @@ export interface Loop {
   createdAt: string;
 }
 
+export interface FleetMessage {
+  id: string;
+  agentId: string | null;
+  taskId: string | null;
+  type: MessageType;
+  priority: MessagePriority;
+  text: string;
+  status: MessageStatus;
+  requiresHuman: boolean;
+  reminderAt: string | null;
+  lastRemindedAt: string | null;
+  projectName: string | null;
+  agentRole: string | null;
+  taskTitle: string | null;
+  createdAt: string;
+}
+
 export interface FleetSnapshot {
   projects: Project[];
   tasks: Task[];
   agents: Agent[];
   loops: Loop[];
+  messages: FleetMessage[];
 }

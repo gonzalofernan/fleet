@@ -36,6 +36,8 @@ Fleet/
 
 The settings file is the configuration source of truth. SQLite remains the runtime index, so the captain can distinguish projects, loops, tasks, and agents without scanning the workspace.
 
+The captain is launched through a persistent Captain Host backed by `node-pty`. Worker agents publish structured messages into SQLite with `fleet message send`; the host delivers unread messages to the captain's Codex session as `[FLEET EVENT]` input, including urgent approval requests and blockers.
+
 Model routing defaults to GPT-5.6 Luna for the captain and routine work, Terra for implementation and review, and Sol for architecture or high-risk tasks. The captain can override the recommendation per task.
 
 ## Design boundaries

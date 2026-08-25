@@ -4,6 +4,8 @@ import { renderDashboard } from "./dashboard.js";
 import { FleetService } from "./service.js";
 import { defaultDatabasePath, FleetStore } from "./storage.js";
 import { ensureSettings, initializeLoopDirectory, initializeProjectDirectory } from "./settings.js";
+import { startCaptainHost } from "./captain-host.js";
+import { MESSAGE_PRIORITIES, MESSAGE_TYPES, type MessagePriority, type MessageStatus, type MessageType } from "./domain.js";
 
 const [, , ...args] = process.argv;
 const settings = ensureSettings();
@@ -29,6 +31,11 @@ function execute(command: string[]): object | string {
         "fleet agent request --task <task-id> --role <role> [--provider codex]",
         "fleet agent launch <agent-id>",
         "fleet loop create --title <title> --schedule <schedule> [--project <project-id>]",
+        "fleet message send --text <text> [--agent <agent-id>] [--task <task-id>] [--type info|question|approval|blocked|completed] [--priority low|normal|high|urgent]",
+        "fleet message list [--status unread|delivered|acknowledged|resolved]",
+        "fleet message acknowledge --id <message-id>",
+        "fleet message resolve --id <message-id>",
+        "fleet message snooze --id <message-id> --minutes <minutes>",
         "fleet settings",
         "fleet reconcile",
         "fleet captain",
@@ -70,6 +77,41 @@ function execute(command: string[]): object | string {
     );
   }
   if (command[0] === "settings") return settings;
+  if (command[0] === "message" && command[1] === "send") {
+    const type = parseMessageType(option(command, "--type") ?? "info");
+    const priority = parseMessagePriority(option(command, "--priority") ?? "normal");
+    return store.sendMessage({
+      text: required(option(command, "--text"), "--text"),
+      agentId: option(command, "--agent") ?? null,
+      taskId: option(command, "--task") ?? null,
+      type,
+      priority,
+    });
+  }
+  if (command[0] === "message" && command[1] === "list") {
+    const status = option(command, "--status");
+    return store.listMessages(status ? parseMessageStatus(status) : null);
+  }
+  if (command[0] === "message" && command[1] === "acknowledge") {
+    return store.acknowledgeMessage(required(option(command, "--id"), "--id"));
+  }
+  if (command[0] === "message" && command[1] === "resolve") {
+    return store.resolveMessage(required(option(command, "--id"), "--id"));
+  }
+  if (command[0] === "message" && command[1] === "snooze") {
+    const minutes = Number(required(option(command, "--minutes"), "--minutes"));
+    return store.snoozeMessage(required(option(command, "--id"), "--id"), minutes);
+  }
+  if (command[0] === "captain-host") {
+    startCaptainHost({
+      codexPath: required(option(command, "--codex-path"), "--codex-path"),
+      model: required(option(command, "--model"), "--model"),
+      workingDirectory: required(option(command, "--working-directory"), "--working-directory"),
+      databasePath: required(option(command, "--database-path"), "--database-path"),
+      prompt: Buffer.from(required(option(command, "--prompt-base64"), "--prompt-base64"), "base64").toString("utf8"),
+    });
+    return { status: "host-started" };
+  }
   if (command[0] === "captain") {
     new FleetService(store).launchCaptain(process.cwd());
     return { status: "launched", title: "FLEET | Captain" };
@@ -93,4 +135,19 @@ function option(args: string[], name: string): string | undefined {
 function required(value: string | undefined, label: string): string {
   if (!value || value.startsWith("--")) throw new Error(`Missing ${label}`);
   return value;
+}
+
+function parseMessageType(value: string): MessageType {
+  if (!MESSAGE_TYPES.includes(value as MessageType)) throw new Error(`Unknown message type: ${value}`);
+  return value as MessageType;
+}
+
+function parseMessagePriority(value: string): MessagePriority {
+  if (!MESSAGE_PRIORITIES.includes(value as MessagePriority)) throw new Error(`Unknown message priority: ${value}`);
+  return value as MessagePriority;
+}
+
+function parseMessageStatus(value: string): MessageStatus {
+  if (!["unread", "delivered", "acknowledged", "resolved"].includes(value)) throw new Error(`Unknown message status: ${value}`);
+  return value as MessageStatus;
 }

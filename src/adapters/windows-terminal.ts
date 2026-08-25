@@ -29,6 +29,8 @@ export class WindowsTerminalAdapter {
 
 export interface CaptainRequest {
   codexPath: string;
+  fleetCliPath: string;
+  databasePath: string;
   workingDirectory: string;
   model: string;
   prompt: string;
@@ -60,7 +62,8 @@ function escapePowerShell(value: string): string {
 }
 
 export function buildCaptainTerminalArgs(request: CaptainRequest): string[] {
-  const command = `& '${escapePowerShell(request.codexPath)}' -m '${escapePowerShell(request.model)}' -s danger-full-access -a never --no-alt-screen -C '${escapePowerShell(request.workingDirectory)}' '${escapePowerShell(request.prompt)}'`;
+  const prompt = Buffer.from(request.prompt, "utf8").toString("base64");
+  const command = `& '${escapePowerShell(process.execPath)}' '${escapePowerShell(request.fleetCliPath)}' captain-host --codex-path '${escapePowerShell(request.codexPath)}' --model '${escapePowerShell(request.model)}' --working-directory '${escapePowerShell(request.workingDirectory)}' --database-path '${escapePowerShell(request.databasePath)}' --prompt-base64 '${prompt}'`;
   return [
     "-w", "fleet",
     "new-tab",

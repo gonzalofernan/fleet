@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
-import type { Agent, AgentContext, AgentStatus, FleetSnapshot, Loop, Project, Task } from "./domain.js";
+import type { Agent, AgentContext, AgentStatus, FleetMessage, FleetSnapshot, Loop, MessagePriority, MessageStatus, MessageType, Project, Task } from "./domain.js";
 import { recommendModel } from "./models.js";
 
 export class FleetStore {
@@ -56,12 +56,28 @@ export class FleetStore {
         directory_path TEXT,
         created_at TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT REFERENCES agents(id),
+        task_id TEXT REFERENCES tasks(id),
+        type TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        text TEXT NOT NULL,
+        status TEXT NOT NULL,
+        requires_human INTEGER NOT NULL DEFAULT 0,
+        reminder_at TEXT,
+        last_reminded_at TEXT,
+        created_at TEXT NOT NULL
+      ) STRICT;
     `);
     this.addColumnIfMissing("agents", "branch", "TEXT");
     this.addColumnIfMissing("agents", "worktree_path", "TEXT");
     this.addColumnIfMissing("agents", "terminal_title", "TEXT");
     this.addColumnIfMissing("agents", "model", "TEXT NOT NULL DEFAULT 'gpt-5.6-luna'");
     this.addColumnIfMissing("loops", "directory_path", "TEXT");
+    this.addColumnIfMissing("messages", "requires_human", "INTEGER NOT NULL DEFAULT 0");
+    this.addColumnIfMissing("messages", "reminder_at", "TEXT");
+    this.addColumnIfMissing("messages", "last_reminded_at", "TEXT");
   }
 
   addProject(name: string, rootPath: string): Project {
@@ -114,6 +130,87 @@ export class FleetStore {
     return loop;
   }
 
+  sendMessage(details: { agentId?: string | null; taskId?: string | null; type: MessageType; priority?: MessagePriority; text: string; requiresHuman?: boolean }): FleetMessage {
+    if (details.agentId) this.requireAgent(details.agentId);
+    if (details.taskId) this.requireTask(details.taskId);
+    const requiresHuman = details.requiresHuman ?? ["question", "approval", "blocked"].includes(details.type);
+    const message: FleetMessage = {
+      id: randomUUID(), agentId: details.agentId ?? null, taskId: details.taskId ?? null,
+      type: details.type, priority: details.priority ?? "normal", text: details.text,
+      status: "unread", requiresHuman, reminderAt: null, lastRemindedAt: null,
+      projectName: null, agentRole: null, taskTitle: null, createdAt: now(),
+    };
+    this.database.prepare(
+      "INSERT INTO messages (id, agent_id, task_id, type, priority, text, status, requires_human, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(message.id, message.agentId, message.taskId, message.type, message.priority, message.text, message.status, Number(message.requiresHuman), message.createdAt);
+    this.addEvent("message", message.id, "created", details);
+    return message;
+  }
+
+  listMessages(status: MessageStatus | null = null): FleetMessage[] {
+    const baseQuery = `SELECT m.id, m.agent_id AS agentId, m.task_id AS taskId, m.type, m.priority, m.text, m.status,
+      m.requires_human AS requiresHuman, m.reminder_at AS reminderAt, m.last_reminded_at AS lastRemindedAt,
+      p.name AS projectName, a.role AS agentRole, t.title AS taskTitle, m.created_at AS createdAt
+      FROM messages m
+      LEFT JOIN agents a ON a.id = m.agent_id
+      LEFT JOIN tasks t ON t.id = m.task_id
+      LEFT JOIN projects p ON p.id = t.project_id`;
+    const query = status
+      ? `${baseQuery} WHERE m.status = ? ORDER BY CASE m.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, m.created_at`
+      : `${baseQuery} ORDER BY m.created_at`;
+    const rows = (status ? this.database.prepare(query).all(status) : this.database.prepare(query).all()) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.mapMessage(row));
+  }
+
+  listMessagesDueForReminder(asOf = new Date()): FleetMessage[] {
+    const rows = this.database.prepare(`
+      SELECT m.id, m.agent_id AS agentId, m.task_id AS taskId, m.type, m.priority, m.text, m.status,
+        m.requires_human AS requiresHuman, m.reminder_at AS reminderAt, m.last_reminded_at AS lastRemindedAt,
+        p.name AS projectName, a.role AS agentRole, t.title AS taskTitle, m.created_at AS createdAt
+      FROM messages m
+      LEFT JOIN agents a ON a.id = m.agent_id
+      LEFT JOIN tasks t ON t.id = m.task_id
+      LEFT JOIN projects p ON p.id = t.project_id
+      WHERE m.requires_human = 1 AND m.status IN ('delivered', 'acknowledged') AND m.reminder_at IS NOT NULL AND m.reminder_at <= ?
+      ORDER BY CASE m.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, m.created_at
+    `).all(asOf.toISOString()) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.mapMessage(row));
+  }
+
+  markMessageDelivered(id: string): FleetMessage {
+    const message = this.listMessages().find((entry) => entry.id === id);
+    if (!message) throw new Error(`Unknown message: ${id}`);
+    const reminderAt = message.requiresHuman ? nextReminder(message.priority) : null;
+    this.database.prepare("UPDATE messages SET status = 'delivered', reminder_at = ? WHERE id = ? AND status = 'unread'").run(reminderAt, id);
+    return { ...message, status: "delivered", reminderAt };
+  }
+
+  markMessageReminded(id: string): FleetMessage {
+    const message = this.listMessages().find((entry) => entry.id === id);
+    if (!message) throw new Error(`Unknown message: ${id}`);
+    const remindedAt = now();
+    const reminderAt = nextReminder(message.priority);
+    this.database.prepare("UPDATE messages SET last_reminded_at = ?, reminder_at = ? WHERE id = ? AND status IN ('delivered', 'acknowledged')").run(remindedAt, reminderAt, id);
+    return { ...message, lastRemindedAt: remindedAt, reminderAt };
+  }
+
+  acknowledgeMessage(id: string): FleetMessage {
+    this.database.prepare("UPDATE messages SET status = 'acknowledged' WHERE id = ? AND status IN ('delivered', 'unread')").run(id);
+    return this.requireMessage(id);
+  }
+
+  resolveMessage(id: string): FleetMessage {
+    this.database.prepare("UPDATE messages SET status = 'resolved', reminder_at = NULL WHERE id = ? AND status <> 'resolved'").run(id);
+    return this.requireMessage(id);
+  }
+
+  snoozeMessage(id: string, minutes: number): FleetMessage {
+    if (!Number.isFinite(minutes) || minutes <= 0) throw new Error("Snooze minutes must be positive");
+    const reminderAt = new Date(Date.now() + minutes * 60_000).toISOString();
+    this.database.prepare("UPDATE messages SET status = 'acknowledged', reminder_at = ? WHERE id = ? AND status <> 'resolved'").run(reminderAt, id);
+    return this.requireMessage(id);
+  }
+
   findProjectByRoot(rootPath: string): Project | null {
     const row = this.database.prepare(
       "SELECT id, name, root_path AS rootPath, created_at AS createdAt FROM projects WHERE root_path = ?",
@@ -147,6 +244,7 @@ export class FleetStore {
       tasks: this.database.prepare("SELECT id, project_id AS projectId, title, status, created_at AS createdAt FROM tasks ORDER BY created_at").all() as unknown as Task[],
       agents: this.database.prepare("SELECT id, task_id AS taskId, role, provider, model, status, branch, worktree_path AS worktreePath, terminal_title AS terminalTitle, created_at AS createdAt FROM agents ORDER BY created_at").all() as unknown as Agent[],
       loops: (this.database.prepare("SELECT id, project_id AS projectId, title, schedule, enabled, directory_path AS directoryPath, created_at AS createdAt FROM loops ORDER BY created_at").all() as Array<Omit<Loop, "enabled"> & { enabled: number }>).map((loop) => ({ ...loop, enabled: Boolean(loop.enabled) })),
+      messages: this.listMessages(),
     };
   }
 
@@ -213,6 +311,27 @@ export class FleetStore {
     }
   }
 
+  private requireAgent(id: string): void {
+    if (!this.database.prepare("SELECT 1 FROM agents WHERE id = ?").get(id)) throw new Error(`Unknown agent: ${id}`);
+  }
+
+  private requireMessage(id: string): FleetMessage {
+    const message = this.listMessages().find((entry) => entry.id === id);
+    if (!message) throw new Error(`Unknown message: ${id}`);
+    return message;
+  }
+
+  private mapMessage(row: Record<string, unknown>): FleetMessage {
+    return {
+      id: String(row.id), agentId: row.agentId ? String(row.agentId) : null, taskId: row.taskId ? String(row.taskId) : null,
+      type: String(row.type) as MessageType, priority: String(row.priority) as MessagePriority, text: String(row.text),
+      status: String(row.status) as MessageStatus, requiresHuman: Boolean(row.requiresHuman),
+      reminderAt: row.reminderAt ? String(row.reminderAt) : null, lastRemindedAt: row.lastRemindedAt ? String(row.lastRemindedAt) : null,
+      projectName: row.projectName ? String(row.projectName) : null, agentRole: row.agentRole ? String(row.agentRole) : null,
+      taskTitle: row.taskTitle ? String(row.taskTitle) : null, createdAt: String(row.createdAt),
+    };
+  }
+
   private addEvent(entityType: string, entityId: string, eventType: string, payload: object): void {
     this.database.prepare(
       "INSERT INTO events (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -234,6 +353,11 @@ export function defaultDatabasePath(): string {
 
 function now(): string {
   return new Date().toISOString();
+}
+
+function nextReminder(priority: MessagePriority): string {
+  const minutes = priority === "urgent" ? 5 : priority === "high" ? 15 : priority === "normal" ? 60 : 240;
+  return new Date(Date.now() + minutes * 60_000).toISOString();
 }
 
 function requiredRow(row: Record<string, string | null>, key: string): string {

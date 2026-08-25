@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import { buildCaptainPrompt } from "./captain.js";
 import { isKnownModel, recommendModel } from "./models.js";
 import type { Agent } from "./domain.js";
-import { FleetStore } from "./storage.js";
+import { defaultDatabasePath, FleetStore } from "./storage.js";
 import { ensureSettings, type FleetSettings } from "./settings.js";
 
 export class FleetService {
@@ -44,6 +44,8 @@ export class FleetService {
     if (!isKnownModel(model)) throw new Error(`Unknown captain model: ${model}`);
     this.terminals.launchCaptain({
       codexPath,
+      fleetCliPath: process.argv[1] ?? join(process.cwd(), "dist", "cli.js"),
+      databasePath: process.env.FLEET_DB || defaultDatabasePath(),
       workingDirectory,
       model,
       prompt: buildCaptainPrompt(this.store.snapshot(), this.settings),

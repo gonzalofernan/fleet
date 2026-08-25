@@ -55,6 +55,26 @@ test("registers an enabled loop in the fleet snapshot", () => {
   store.close();
 });
 
+test("persists prioritized agent messages and delivers them once", () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-test-"));
+  const store = new FleetStore(join(home, "fleet.db"));
+  const project = store.addProject("fleet", home);
+  const task = store.createTask(project.id, "Ask the captain");
+  const agent = store.requestAgent(task.id, "reviewer");
+  const message = store.sendMessage({ agentId: agent.id, taskId: task.id, type: "approval", priority: "high", text: "Should I merge this change?" });
+
+  assert.equal(store.listMessages("unread")[0]?.id, message.id);
+  assert.equal(store.markMessageDelivered(message.id).status, "delivered");
+  assert.equal(store.listMessages("unread").length, 0);
+  assert.equal(store.listMessages()[0]?.requiresHuman, true);
+  assert.equal(store.listMessages()[0]?.reminderAt !== null, true);
+  assert.equal(store.listMessagesDueForReminder(new Date(Date.now() + 60 * 60_000)).length, 1);
+  assert.equal(store.markMessageReminded(message.id).lastRemindedAt !== null, true);
+  assert.equal(store.resolveMessage(message.id).status, "resolved");
+  assert.equal(store.listMessagesDueForReminder().length, 0);
+  store.close();
+});
+
 test("uses a stable per-user default database location", () => {
   const databasePath = defaultDatabasePath();
   assert.match(databasePath, /Fleet[\\/]fleet\.db$/);
