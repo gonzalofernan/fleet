@@ -14,7 +14,8 @@ This first milestone persists projects, tasks, and agents in SQLite. It can prov
 ```powershell
 npm install
 npm test
-node dist/cli.js project add fleet --path .
+node dist/cli.js project create fleet
+node dist/cli.js project clone existing-project --url https://github.com/example/existing-project.git
 node dist/cli.js task create --project <project-id> --title "Add Windows Terminal adapter"
 node dist/cli.js agent request --task <task-id> --role implementer
 node dist/cli.js agent launch <agent-id>
