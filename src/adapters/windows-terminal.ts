@@ -64,7 +64,7 @@ function escapePowerShell(value: string): string {
 export function buildCaptainTerminalArgs(request: CaptainRequest): string[] {
   const command = `Clear-Host; & '${escapePowerShell(request.codexPath)}' -m '${escapePowerShell(request.model)}' -s danger-full-access -a never -C '${escapePowerShell(request.workingDirectory)}' '${escapePowerShell(request.prompt)}'`;
   return [
-    "-w", "fleet",
+    "-w", "new",
     "new-tab",
     "--title", "FLEET | Captain",
     "--suppressApplicationTitle",
