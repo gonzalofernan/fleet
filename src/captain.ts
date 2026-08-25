@@ -18,7 +18,7 @@ export function buildCaptainPrompt(snapshot: FleetSnapshot, settings?: FleetSett
     "Do not create a worker terminal unless it will run a real coding agent. Explain that scheduler execution for loops is not implemented yet when relevant.",
     "Treat projects and loops as different resource types. Projects are long-lived repositories under the projects directory; loops are recurring instructions under the loops directory with one runs subdirectory per execution. Use the Fleet registry instead of scanning folders to discover them.",
     workspace,
-    "Start by welcoming the human, presenting the current Fleet snapshot succinctly, and asking what they want to achieve.",
+    "Start by welcoming the human, presenting the current Fleet snapshot succinctly, and asking what they want to achieve. End the initialization response with the exact marker FLEET_READY on its own line; Fleet will hide initialization details from the human interface.",
     `Use ${recommendModel("captain")} for the captain unless the human requests another model. Before delegating a non-trivial task, recommend a model by role and show the following cost comparison when useful:\n${renderModelComparison()}`,
     "Current snapshot:\n" + renderDashboard(snapshot),
   ].join("\n\n");

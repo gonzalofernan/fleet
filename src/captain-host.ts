@@ -20,7 +20,38 @@ export interface CaptainPty {
 export function startCaptainHost(options: CaptainHostOptions, createPty = createCaptainPty): void {
   const store = new FleetStore(options.databasePath);
   const session = createPty(options);
-  session.onData((data) => process.stdout.write(data));
+  let ready = false;
+  let outputBuffer = "";
+  renderStartup("Starting Codex", [false, false, false, false]);
+  const startupTimer = setInterval(() => {
+    if (!ready) renderStartup("Loading Fleet context", [true, true, false, false]);
+  }, 700);
+  const startupFallback = setTimeout(() => finishStartup(), 45_000);
+  session.onData((data) => {
+    if (ready) {
+      process.stdout.write(data);
+      return;
+    }
+    outputBuffer += data;
+    if (outputBuffer.length > 100_000) outputBuffer = outputBuffer.slice(-50_000);
+    if (outputBuffer.includes("Starting MCP servers")) renderStartup("Loading MCP servers", [true, false, false, false]);
+    if (outputBuffer.includes("You are the Fleet captain")) renderStartup("Injecting Fleet context", [true, true, true, false]);
+    if (outputBuffer.includes("FLEET_READY")) {
+      finishStartup();
+    }
+  });
+
+  function finishStartup(): void {
+    if (ready) return;
+    ready = true;
+    clearInterval(startupTimer);
+    clearTimeout(startupFallback);
+    renderStartup("Fleet ready", [true, true, true, true]);
+    setTimeout(() => {
+      clearScreen();
+      process.stdout.write("Fleet\r\n\r\nHola, soy Fleet. ¿En qué puedo ayudarte?\r\n\r\n");
+    }, 350);
+  }
   const onInput = (data: Buffer) => session.write(data.toString("utf8"));
   process.stdin.on("data", onInput);
   process.stdin.resume();
@@ -39,6 +70,8 @@ export function startCaptainHost(options: CaptainHostOptions, createPty = create
 
   const close = () => {
     clearInterval(poll);
+    clearInterval(startupTimer);
+    clearTimeout(startupFallback);
     process.stdin.off("data", onInput);
     if (process.stdin.isTTY) process.stdin.setRawMode?.(false);
     store.close();
@@ -55,6 +88,23 @@ export function formatCaptainEvent(message: FleetMessage, reminder = false): str
   ].filter(Boolean).join("\r\n");
   const header = `[FLEET EVENT${reminder ? " | REMINDER" : ""} | ${message.priority.toUpperCase()} | ${message.type}]`;
   return `\r\n${header}\r\n${context}${context ? "\r\n" : ""}\r\n${message.text}\r\n\r\n`;
+}
+
+function renderStartup(current: string, checks: boolean[]): void {
+  clearScreen();
+  process.stdout.write([
+    "FLEET | Captain\r\n",
+    "\r\n",
+    `${checks[0] ? "[ok]" : "[ ]"} Cargando Codex\r\n`,
+    `${checks[1] ? "[ok]" : "[ ]"} Cargando MCP servers\r\n`,
+    `${checks[2] ? "[ok]" : "[ ]"} Introduciendo contexto Fleet\r\n`,
+    `${checks[3] ? "[ok]" : "[ ]"} Preparando últimos detalles\r\n`,
+    `\r\n${current}...\r\n`,
+  ].join(""));
+}
+
+function clearScreen(): void {
+  process.stdout.write("\u001b[2J\u001b[H");
 }
 
 function createCaptainPty(options: CaptainHostOptions): CaptainPty {
