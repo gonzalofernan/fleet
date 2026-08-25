@@ -26,10 +26,11 @@ test("builds an interactive Codex captain terminal", () => {
   });
 
   assert.equal(args[4], "FLEET | Captain");
-  assert.equal(args[1], "new");
+  assert.equal(args[1], "-1");
   assert.ok(args.at(-1)?.includes("codex.cmd"));
   assert.ok(args.at(-1)?.includes("-s danger-full-access"));
   assert.ok(args.at(-1)?.includes("-m 'gpt-5.6-luna'"));
   assert.ok(args.at(-1)?.includes("-a never"));
-  assert.ok(args.at(-1)?.includes("Welcome to Fleet"));
+  assert.ok(args.at(-1)?.includes("FromBase64String"));
+  assert.ok(!args.at(-1)?.includes("Welcome to Fleet"));
 });

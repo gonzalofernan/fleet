@@ -62,9 +62,10 @@ function escapePowerShell(value: string): string {
 }
 
 export function buildCaptainTerminalArgs(request: CaptainRequest): string[] {
-  const command = `Clear-Host; & '${escapePowerShell(request.codexPath)}' -m '${escapePowerShell(request.model)}' -s danger-full-access -a never -C '${escapePowerShell(request.workingDirectory)}' '${escapePowerShell(request.prompt)}'`;
+  const promptBase64 = Buffer.from(request.prompt, "utf8").toString("base64");
+  const command = `$prompt=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${promptBase64}')); Clear-Host; & '${escapePowerShell(request.codexPath)}' -m '${escapePowerShell(request.model)}' -s danger-full-access -a never -C '${escapePowerShell(request.workingDirectory)}' $prompt`;
   return [
-    "-w", "new",
+    "-w", "-1",
     "new-tab",
     "--title", "FLEET | Captain",
     "--suppressApplicationTitle",
