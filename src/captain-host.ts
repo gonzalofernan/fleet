@@ -21,6 +21,10 @@ export function startCaptainHost(options: CaptainHostOptions, createPty = create
   const store = new FleetStore(options.databasePath);
   const session = createPty(options);
   session.onData((data) => process.stdout.write(data));
+  const onInput = (data: Buffer) => session.write(data.toString("utf8"));
+  process.stdin.on("data", onInput);
+  process.stdin.resume();
+  if (process.stdin.isTTY) process.stdin.setRawMode?.(true);
 
   const poll = setInterval(() => {
     for (const message of store.listMessages("unread")) {
@@ -35,6 +39,8 @@ export function startCaptainHost(options: CaptainHostOptions, createPty = create
 
   const close = () => {
     clearInterval(poll);
+    process.stdin.off("data", onInput);
+    if (process.stdin.isTTY) process.stdin.setRawMode?.(false);
     store.close();
   };
   session.onExit(close);
