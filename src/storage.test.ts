@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { FleetStore } from "./storage.js";
+import { defaultDatabasePath, FleetStore } from "./storage.js";
 
 test("persists a project, task, and requested agent", () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-test-"));
@@ -44,4 +44,18 @@ test("rejects a task for an unknown project", () => {
   const store = new FleetStore(join(home, "fleet.db"));
   assert.throws(() => store.createTask("missing", "Impossible task"), /Unknown project/);
   store.close();
+});
+
+test("registers an enabled loop in the fleet snapshot", () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-test-"));
+  const store = new FleetStore(join(home, "fleet.db"));
+  const loop = store.createLoop("Daily review", "0 9 * * 1-5", null);
+  assert.equal(store.snapshot().loops[0]?.id, loop.id);
+  assert.equal(store.snapshot().loops[0]?.enabled, true);
+  store.close();
+});
+
+test("uses a stable per-user default database location", () => {
+  const databasePath = defaultDatabasePath();
+  assert.match(databasePath, /Fleet[\\/]fleet\.db$/);
 });

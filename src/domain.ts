@@ -42,6 +42,7 @@ export interface Agent {
   taskId: string;
   role: string;
   provider: string;
+  model: string;
   status: AgentStatus;
   branch: string | null;
   worktreePath: string | null;
@@ -55,8 +56,19 @@ export interface AgentContext {
   project: Project;
 }
 
+export interface Loop {
+  id: string;
+  projectId: string | null;
+  title: string;
+  schedule: string;
+  enabled: boolean;
+  directoryPath: string | null;
+  createdAt: string;
+}
+
 export interface FleetSnapshot {
   projects: Project[];
   tasks: Task[];
   agents: Agent[];
+  loops: Loop[];
 }

@@ -16,6 +16,22 @@ export class WindowsTerminalAdapter {
     });
     child.unref();
   }
+
+  launchCaptain(request: CaptainRequest): void {
+    const child = spawn("wt.exe", buildCaptainTerminalArgs(request), {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    child.unref();
+  }
+}
+
+export interface CaptainRequest {
+  codexPath: string;
+  workingDirectory: string;
+  model: string;
+  prompt: string;
 }
 
 export function buildWindowsTerminalArgs(request: TerminalRequest): string[] {
@@ -41,4 +57,17 @@ export function buildWindowsTerminalArgs(request: TerminalRequest): string[] {
 
 function escapePowerShell(value: string): string {
   return value.replaceAll("'", "''");
+}
+
+export function buildCaptainTerminalArgs(request: CaptainRequest): string[] {
+  const command = `& '${escapePowerShell(request.codexPath)}' -m '${escapePowerShell(request.model)}' -s danger-full-access -a never --no-alt-screen -C '${escapePowerShell(request.workingDirectory)}' '${escapePowerShell(request.prompt)}'`;
+  return [
+    "-w", "fleet",
+    "new-tab",
+    "--title", "FLEET | Captain",
+    "--suppressApplicationTitle",
+    "--tabColor", "#E4A11B",
+    "-d", request.workingDirectory,
+    "powershell.exe", "-NoExit", "-Command", command,
+  ];
 }

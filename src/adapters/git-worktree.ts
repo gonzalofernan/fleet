@@ -19,4 +19,22 @@ export class GitWorktreeAdapter {
     });
     return { branch, path };
   }
+
+  list(projectRoot: string): Worktree[] {
+    const output = execFileSync("git", ["-C", projectRoot, "worktree", "list", "--porcelain"], {
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+    return parseWorktreeList(output).filter((worktree) => worktree.branch.startsWith("fleet/agent-"));
+  }
+}
+
+export function parseWorktreeList(output: string): Worktree[] {
+  const worktrees: Worktree[] = [];
+  for (const block of output.trim().split("\n\n")) {
+    const path = block.match(/^worktree (.+)$/m)?.[1];
+    const branch = block.match(/^branch refs\/heads\/(.+)$/m)?.[1];
+    if (path && branch) worktrees.push({ path, branch });
+  }
+  return worktrees;
 }
