@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-import { resolve } from "node:path";
 import { renderDashboard } from "./dashboard.js";
 import { FleetService } from "./service.js";
 import { defaultDatabasePath, FleetStore } from "./storage.js";
-import { ensureSettings, initializeLoopDirectory, initializeProjectDirectory } from "./settings.js";
+import { cloneManagedProject, createManagedProject, ensureSettings, initializeLoopDirectory } from "./settings.js";
 import { startCaptainHost } from "./captain-host.js";
 import { MESSAGE_PRIORITIES, MESSAGE_TYPES, type MessagePriority, type MessageStatus, type MessageType } from "./domain.js";
 
@@ -25,8 +24,8 @@ function execute(command: string[]): object | string {
   if (command.length === 0 || command[0] === "help" || command[0] === "--help") {
     return {
       usage: [
-        "fleet project add <name> --path <repository-path>",
         "fleet project create <name>",
+        "fleet project clone <name> --url <repository-url>",
         "fleet task create --project <project-id> --title <title>",
         "fleet agent request --task <task-id> --role <role> [--provider codex]",
         "fleet agent launch <agent-id>",
@@ -45,13 +44,13 @@ function execute(command: string[]): object | string {
     };
   }
 
-  if (command[0] === "project" && command[1] === "add") {
-    const name = required(command[2], "project name");
-    return store.addProject(name, resolve(required(option(command, "--path"), "--path")));
-  }
   if (command[0] === "project" && command[1] === "create") {
     const name = required(command[2], "project name");
-    return store.addProject(name, initializeProjectDirectory(settings, name));
+    return store.addProject(name, createManagedProject(settings, name));
+  }
+  if (command[0] === "project" && command[1] === "clone") {
+    const name = required(command[2], "project name");
+    return store.addProject(name, cloneManagedProject(settings, name, required(option(command, "--url"), "--url")));
   }
   if (command[0] === "task" && command[1] === "create") {
     return store.createTask(required(option(command, "--project"), "--project"), required(option(command, "--title"), "--title"));

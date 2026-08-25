@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -85,6 +86,27 @@ export function managedLoopPath(settings: FleetSettings, title: string): string 
 export function initializeProjectDirectory(settings: FleetSettings, name: string): string {
   const directory = managedProjectPath(settings, name);
   mkdirSync(directory, { recursive: true });
+  const metadata = join(directory, "PROJECT.md");
+  if (!existsSync(metadata)) writeFileSync(metadata, `# ${name}\n\nFleet project metadata.\n`, "utf8");
+  return directory;
+}
+
+export function createManagedProject(settings: FleetSettings, name: string): string {
+  const directory = managedProjectPath(settings, name);
+  if (existsSync(directory)) throw new Error(`Managed project path already exists: ${directory}`);
+  initializeProjectDirectory(settings, name);
+  execFileSync("git", ["init", directory], { stdio: "pipe" });
+  execFileSync("git", ["-C", directory, "add", "PROJECT.md"], { stdio: "pipe" });
+  execFileSync("git", ["-C", directory, "-c", "user.name=Fleet", "-c", "user.email=fleet@local", "commit", "-m", "Initialize Fleet project"], { stdio: "pipe" });
+  return directory;
+}
+
+export function cloneManagedProject(settings: FleetSettings, name: string, repositoryUrl: string): string {
+  const directory = managedProjectPath(settings, name);
+  if (existsSync(directory)) {
+    throw new Error(`Managed project path already exists: ${directory}`);
+  }
+  execFileSync("git", ["clone", repositoryUrl, directory], { stdio: "pipe" });
   const metadata = join(directory, "PROJECT.md");
   if (!existsSync(metadata)) writeFileSync(metadata, `# ${name}\n\nFleet project metadata.\n`, "utf8");
   return directory;
