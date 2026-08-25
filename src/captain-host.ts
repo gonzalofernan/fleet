@@ -22,10 +22,7 @@ export function startCaptainHost(options: CaptainHostOptions, createPty = create
   const session = createPty(options);
   let ready = false;
   let outputBuffer = "";
-  renderStartup("Starting Codex", [false, false, false, false]);
-  const startupTimer = setInterval(() => {
-    if (!ready) renderStartup("Loading Fleet context", [true, true, false, false]);
-  }, 700);
+  renderStartup("Preparando Fleet", [false, false, false, false]);
   const startupFallback = setTimeout(() => finishStartup(), 45_000);
   session.onData((data) => {
     if (ready) {
@@ -34,8 +31,6 @@ export function startCaptainHost(options: CaptainHostOptions, createPty = create
     }
     outputBuffer += data;
     if (outputBuffer.length > 100_000) outputBuffer = outputBuffer.slice(-50_000);
-    if (outputBuffer.includes("Starting MCP servers")) renderStartup("Loading MCP servers", [true, false, false, false]);
-    if (outputBuffer.includes("You are the Fleet captain")) renderStartup("Injecting Fleet context", [true, true, true, false]);
     if (outputBuffer.includes("FLEET_READY")) {
       finishStartup();
     }
@@ -44,7 +39,6 @@ export function startCaptainHost(options: CaptainHostOptions, createPty = create
   function finishStartup(): void {
     if (ready) return;
     ready = true;
-    clearInterval(startupTimer);
     clearTimeout(startupFallback);
     renderStartup("Fleet ready", [true, true, true, true]);
     setTimeout(() => {
@@ -70,7 +64,6 @@ export function startCaptainHost(options: CaptainHostOptions, createPty = create
 
   const close = () => {
     clearInterval(poll);
-    clearInterval(startupTimer);
     clearTimeout(startupFallback);
     process.stdin.off("data", onInput);
     if (process.stdin.isTTY) process.stdin.setRawMode?.(false);
@@ -104,7 +97,7 @@ function renderStartup(current: string, checks: boolean[]): void {
 }
 
 function clearScreen(): void {
-  process.stdout.write("\u001b[2J\u001b[H");
+  process.stdout.write("\u001b[2J\u001b[3J\u001b[H");
 }
 
 function createCaptainPty(options: CaptainHostOptions): CaptainPty {
