@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
-import type { Agent, AgentContext, AgentStatus, FleetMessage, FleetSnapshot, Loop, MessagePriority, MessageStatus, MessageType, Project, Task } from "./domain.js";
+import type { Agent, AgentContext, AgentStatus, FleetMessage, FleetSnapshot, Loop, MessagePriority, MessageStatus, MessageType, Project, PullRequestMerge, Task } from "./domain.js";
 import { recommendModel } from "./models.js";
 
 export class FleetStore {
@@ -68,6 +68,16 @@ export class FleetStore {
         reminder_at TEXT,
         last_reminded_at TEXT,
         created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS pull_request_merges (
+        agent_id TEXT PRIMARY KEY REFERENCES agents(id),
+        task_id TEXT NOT NULL REFERENCES tasks(id),
+        number INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        head_ref_name TEXT NOT NULL,
+        base_ref_name TEXT NOT NULL,
+        merged_at TEXT NOT NULL,
+        detected_at TEXT NOT NULL
       ) STRICT;
     `);
     this.addColumnIfMissing("agents", "branch", "TEXT");
@@ -216,6 +226,50 @@ export class FleetStore {
       "SELECT id, name, root_path AS rootPath, created_at AS createdAt FROM projects WHERE root_path = ?",
     ).get(rootPath) as unknown as Project | undefined;
     return row ?? null;
+  }
+
+  listProjects(): Project[] {
+    return this.database.prepare("SELECT id, name, root_path AS rootPath, created_at AS createdAt FROM projects ORDER BY created_at").all() as unknown as Project[];
+  }
+
+  recordPullRequestMerge(agentId: string, details: Omit<PullRequestMerge, "agentId" | "taskId" | "detectedAt">): { merge: PullRequestMerge; agent: Agent; task: Task; taskCompleted: boolean } | null {
+    const context = this.getAgentContext(agentId);
+    if (!context.agent.branch || context.agent.branch !== details.headRefName) {
+      throw new Error(`Pull request head branch does not match agent ${agentId}`);
+    }
+    if (["completed", "cancelled", "failed"].includes(context.agent.status)) return null;
+    const existing = this.database.prepare("SELECT 1 FROM pull_request_merges WHERE agent_id = ?").get(agentId);
+    if (existing) return null;
+
+    const detectedAt = now();
+    const merge: PullRequestMerge = { agentId, taskId: context.task.id, detectedAt, ...details };
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare(`
+        INSERT INTO pull_request_merges (agent_id, task_id, number, url, head_ref_name, base_ref_name, merged_at, detected_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(merge.agentId, merge.taskId, merge.number, merge.url, merge.headRefName, merge.baseRefName, merge.mergedAt, merge.detectedAt);
+      this.database.prepare("UPDATE agents SET status = 'completed' WHERE id = ?").run(agentId);
+      this.addEvent("agent", agentId, "completed_from_pull_request_merge", merge);
+      const remaining = this.database.prepare(`
+        SELECT 1 FROM agents WHERE task_id = ? AND id <> ? AND status NOT IN ('completed', 'failed', 'cancelled') LIMIT 1
+      `).get(context.task.id, agentId);
+      const taskCompleted = !remaining;
+      if (taskCompleted) {
+        this.database.prepare("UPDATE tasks SET status = 'completed' WHERE id = ?").run(context.task.id);
+        this.addEvent("task", context.task.id, "completed_from_pull_request_merge", { agentId, pullRequest: merge });
+      }
+      this.database.exec("COMMIT");
+      return {
+        merge,
+        agent: { ...context.agent, status: "completed" },
+        task: { ...context.task, status: taskCompleted ? "completed" : context.task.status },
+        taskCompleted,
+      };
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   findAgentByWorktree(worktreePath: string): Agent | null {

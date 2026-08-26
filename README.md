@@ -20,6 +20,7 @@ node dist/cli.js agent request --task <task-id> --role implementer
 node dist/cli.js agent launch <agent-id>
 node dist/cli.js dashboard
 node dist/cli.js status
+node dist/cli.js github sync
 ```
 
 Fleet stores control-plane state in `%LOCALAPPDATA%\\Fleet\\fleet.db`. This keeps the captain and workers on one durable registry even when they run from different worktrees.
@@ -37,6 +38,8 @@ Fleet/
 The settings file is the configuration source of truth. SQLite remains the runtime index, so the captain can distinguish projects, loops, tasks, and agents without scanning the workspace.
 
 The captain is launched through a persistent Captain Host backed by `node-pty`. Worker agents publish structured messages into SQLite with `fleet message send`; the host delivers unread messages to the captain's Codex session as `[FLEET EVENT]` input, including urgent approval requests and blockers.
+
+Fleet also checks GitHub every five minutes while the Captain Host is running. It queries `gh` only for merged PRs whose head branch exactly matches a registered active agent branch, records the PR number, URL and merge timestamp, and then completes the agent. The task is completed only when it has no other active agents. You can run the same check on demand with `fleet github sync` (or restrict it with `--project <repository-path>`).
 
 Model routing defaults to GPT-5.6 Luna for the captain and routine work, Terra for implementation and review, and Sol for architecture or high-risk tasks. The captain can override the recommendation per task.
 
