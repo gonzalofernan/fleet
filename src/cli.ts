@@ -1,10 +1,14 @@
 #!/usr/bin/env node
+import { resolve } from "node:path";
 import { renderDashboard } from "./dashboard.js";
 import { FleetService } from "./service.js";
 import { defaultDatabasePath, FleetStore } from "./storage.js";
-import { cloneManagedProject, createManagedProject, ensureSettings, initializeLoopDirectory } from "./settings.js";
+import { cloneManagedProject, createManagedProject, ensureSettings, initializeLoopDirectory, initializeProjectDirectory } from "./settings.js";
+import { initializeProjectContext } from "./project-context.js";
 import { startCaptainHost } from "./captain-host.js";
 import { MESSAGE_PRIORITIES, MESSAGE_TYPES, type MessagePriority, type MessageStatus, type MessageType } from "./domain.js";
+import { cleanupCodexSessions } from "./codex-sessions.js";
+import { startCaptainBridge, startWorkerBridge } from "./agent-bridge.js";
 
 const [, , ...args] = process.argv;
 const settings = ensureSettings();
@@ -26,9 +30,15 @@ function execute(command: string[]): object | string {
       usage: [
         "fleet project create <name>",
         "fleet project clone <name> --url <repository-url>",
+        "fleet project add <name> --path <repository-path>",
+        "fleet project context --id <project-id>",
         "fleet task create --project <project-id> --title <title>",
         "fleet agent request --task <task-id> --role <role> [--provider codex]",
         "fleet agent launch <agent-id>",
+        "fleet agent status --id <agent-id> --status <status> [--message <text>]",
+        "fleet agent reply --id <agent-id> --text <text>",
+        "fleet agent complete --id <agent-id> --message <summary>",
+        "fleet worker-cleanup --agent-id <agent-id> --working-directory <path> --started-at <iso> --codex-path <path>",
         "fleet loop create --title <title> --schedule <schedule> [--project <project-id>]",
         "fleet message send --text <text> [--agent <agent-id>] [--task <task-id>] [--type info|question|approval|blocked|completed] [--priority low|normal|high|urgent]",
         "fleet message list [--status unread|delivered|acknowledged|resolved]",
@@ -39,12 +49,18 @@ function execute(command: string[]): object | string {
         "fleet reconcile",
         "fleet github sync [--project <repository-path>]",
         "fleet captain",
-        "fleet dashboard",
+        "fleet dashboard [--recent-projects <n>] [--recent-activity <n>]",
         "fleet status",
       ],
     };
   }
 
+  if (command[0] === "project" && command[1] === "add") {
+    const name = required(command[2], "project name");
+    const rootPath = resolve(required(option(command, "--path"), "--path"));
+    const project = store.addProject(name, rootPath);
+    return { ...project, context: initializeProjectContext(settings, name, rootPath) };
+  }
   if (command[0] === "project" && command[1] === "create") {
     const name = required(command[2], "project name");
     return store.addProject(name, createManagedProject(settings, name));
@@ -52,6 +68,10 @@ function execute(command: string[]): object | string {
   if (command[0] === "project" && command[1] === "clone") {
     const name = required(command[2], "project name");
     return store.addProject(name, cloneManagedProject(settings, name, required(option(command, "--url"), "--url")));
+  }
+  if (command[0] === "project" && command[1] === "context") {
+    const project = store.getProject(required(option(command, "--id"), "project id"));
+    return initializeProjectContext(settings, project.name, project.rootPath);
   }
   if (command[0] === "task" && command[1] === "create") {
     return store.createTask(required(option(command, "--project"), "--project"), required(option(command, "--title"), "--title"));
@@ -66,6 +86,26 @@ function execute(command: string[]): object | string {
   }
   if (command[0] === "agent" && command[1] === "launch") {
     return new FleetService(store).launchAgent(required(command[2], "agent id"));
+  }
+  if (command[0] === "agent" && command[1] === "status") {
+    return store.updateAgentStatus(
+      required(option(command, "--id"), "agent id"),
+      required(option(command, "--status"), "agent status") as Parameters<FleetStore["updateAgentStatus"]>[1],
+      option(command, "--message"),
+    );
+  }
+  if (command[0] === "agent" && command[1] === "reply") {
+    return store.queueAgentReply(
+      required(option(command, "--id"), "agent id"),
+      required(option(command, "--text"), "reply text"),
+    );
+  }
+  if (command[0] === "agent" && command[1] === "complete") {
+    new FleetService(store).completeAgent(
+      required(option(command, "--id"), "agent id"),
+      required(option(command, "--message"), "completion summary"),
+    );
+    return "";
   }
   if (command[0] === "loop" && command[1] === "create") {
     const title = required(option(command, "--title"), "--title");
@@ -112,6 +152,42 @@ function execute(command: string[]): object | string {
     });
     return "";
   }
+  if (command[0] === "captain-bridge") {
+    startCaptainBridge({
+      codexPath: required(option(command, "--codex-path"), "--codex-path"),
+      databasePath: required(option(command, "--database-path"), "--database-path"),
+      workingDirectory: required(option(command, "--working-directory"), "--working-directory"),
+      startedAt: required(option(command, "--started-at"), "--started-at"),
+    });
+    return "";
+  }
+  if (command[0] === "worker-bridge") {
+    startWorkerBridge({
+      agentId: required(option(command, "--agent-id"), "agent id"),
+      codexPath: required(option(command, "--codex-path"), "--codex-path"),
+      databasePath: required(option(command, "--database-path"), "--database-path"),
+      workingDirectory: required(option(command, "--working-directory"), "--working-directory"),
+      startedAt: required(option(command, "--started-at"), "--started-at"),
+    });
+    return "";
+  }
+  if (command[0] === "captain-cleanup") {
+    cleanupCodexSessions({
+      workingDirectory: required(option(command, "--working-directory"), "--working-directory"),
+      startedAt: required(option(command, "--started-at"), "--started-at"),
+      codexPath: required(option(command, "--codex-path"), "--codex-path"),
+    });
+    return "";
+  }
+  if (command[0] === "worker-cleanup") {
+    cleanupCodexSessions({
+      workingDirectory: required(option(command, "--working-directory"), "--working-directory"),
+      startedAt: required(option(command, "--started-at"), "--started-at"),
+      codexPath: required(option(command, "--codex-path"), "--codex-path"),
+    });
+    store.clearAgentSession(required(option(command, "--agent-id"), "agent id"));
+    return "";
+  }
   if (command[0] === "captain") {
     new FleetService(store).launchCaptain(process.cwd());
     return { status: "launched", title: "FLEET | Captain" };
@@ -127,7 +203,12 @@ function execute(command: string[]): object | string {
     if (command[1] === "--view") return renderDashboard(store.snapshot());
     return store.snapshot();
   }
-  if (command[0] === "dashboard") return renderDashboard(store.snapshot());
+  if (command[0] === "dashboard") {
+    return renderDashboard(store.snapshot(), {
+      recentProjectsLimit: optionalLimit(command, "--recent-projects"),
+      recentActivityLimit: optionalLimit(command, "--recent-activity"),
+    });
+  }
   throw new Error(`Unknown command: ${command.join(" ")}`);
 }
 
@@ -139,6 +220,14 @@ function option(args: string[], name: string): string | undefined {
 function required(value: string | undefined, label: string): string {
   if (!value || value.startsWith("--")) throw new Error(`Missing ${label}`);
   return value;
+}
+
+function optionalLimit(args: string[], name: string): number | undefined {
+  const value = option(args, name);
+  if (value === undefined) return undefined;
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error(`${name} must be an integer between 1 and 50`);
+  return limit;
 }
 
 function parseMessageType(value: string): MessageType {

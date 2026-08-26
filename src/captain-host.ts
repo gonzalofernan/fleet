@@ -2,6 +2,7 @@ import { spawn as spawnPty, type IPty } from "node-pty";
 import { FleetStore } from "./storage.js";
 import type { FleetMessage } from "./domain.js";
 import { FleetService } from "./service.js";
+import { flattenPromptForWindowsArgument } from "./adapters/windows-terminal.js";
 
 export interface CaptainHostOptions {
   codexPath: string;
@@ -125,7 +126,7 @@ function createCaptainPty(options: CaptainHostOptions): CaptainPty {
 }
 
 export function buildCodexCommand(options: CaptainHostOptions): string {
-  return `& '${escapePowerShell(options.codexPath)}' -m '${escapePowerShell(options.model)}' -s danger-full-access -a never -C '${escapePowerShell(options.workingDirectory)}' '${escapePowerShell(options.prompt)}'`;
+  return `& '${escapePowerShell(options.codexPath)}' -m '${escapePowerShell(options.model)}' -s danger-full-access -a never -C '${escapePowerShell(options.workingDirectory)}' '${escapePowerShell(flattenPromptForWindowsArgument(options.prompt))}'`;
 }
 
 function escapePowerShell(value: string): string {

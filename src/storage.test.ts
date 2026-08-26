@@ -17,6 +17,9 @@ test("persists a project, task, and requested agent", () => {
   assert.equal(snapshot.tasks[0]?.projectId, project.id);
   assert.equal(snapshot.agents[0]?.taskId, task.id);
   assert.equal(snapshot.agents[0]?.worktreePath, null);
+  const agentRequested = snapshot.recentActivity?.find((entry) => entry.eventType === "requested" && entry.entityType === "agent");
+  assert.equal(agentRequested?.projectName, "fleet");
+  assert.equal(agentRequested?.taskTitle, "Create the Codex adapter");
   assert.equal(agent.status, "requested");
   store.close();
 });
@@ -33,9 +36,21 @@ test("provisions a requested agent with its runtime details", () => {
     terminalTitle: "FLEET | fleet | test",
   });
 
-  assert.equal(provisioned.status, "waiting");
+  assert.equal(provisioned.status, "provisioning");
   assert.equal(provisioned.branch, "fleet/agent-test");
   assert.equal(store.getAgentContext(agent.id).project.name, "fleet");
+  assert.equal(store.updateAgentStatus(agent.id, "running", "Worker started").status, "running");
+  assert.equal(store.snapshot().tasks[0]?.status, "running");
+  const reply = store.queueAgentReply(agent.id, "Continúa con la alternativa A.");
+  assert.equal(reply.status, "queued");
+  assert.equal(store.listQueuedAgentReplies(agent.id)[0]?.text, "Continúa con la alternativa A.");
+  store.attachAgentSession(agent.id, "session-123", "2026-08-26T10:00:00.000Z");
+  assert.equal(store.markAgentReplyDelivered(reply.id).status, "delivered");
+  assert.equal(store.listQueuedAgentReplies(agent.id).length, 0);
+  store.clearAgentSession(agent.id);
+  assert.match(store.snapshot().recentActivity?.[0]?.eventType ?? "", /session_detached|status/);
+  assert.equal(store.updateAgentStatus(agent.id, "completed", "Worker completed").status, "completed");
+  assert.equal(store.snapshot().tasks[0]?.status, "review");
   store.close();
 });
 

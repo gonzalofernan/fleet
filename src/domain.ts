@@ -27,6 +27,7 @@ export const MESSAGE_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];
 export type MessagePriority = (typeof MESSAGE_PRIORITIES)[number];
 export type MessageStatus = "unread" | "delivered" | "acknowledged" | "resolved";
+export type AgentReplyStatus = "queued" | "delivered" | "failed";
 
 export interface Project {
   id: string;
@@ -100,10 +101,32 @@ export interface FleetMessage {
   createdAt: string;
 }
 
+export interface AgentReply {
+  id: string;
+  agentId: string;
+  text: string;
+  status: AgentReplyStatus;
+  createdAt: string;
+  deliveredAt: string | null;
+}
+
+export interface FleetActivity {
+  id: string;
+  entityType: string;
+  entityId: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  projectName: string | null;
+  agentRole: string | null;
+  taskTitle: string | null;
+}
+
 export interface FleetSnapshot {
   projects: Project[];
   tasks: Task[];
   agents: Agent[];
   loops: Loop[];
   messages: FleetMessage[];
+  recentActivity?: FleetActivity[];
 }

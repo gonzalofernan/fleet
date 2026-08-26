@@ -2,12 +2,15 @@ import { GitWorktreeAdapter } from "./adapters/git-worktree.js";
 import { GitHubPullRequestAdapter, type PullRequestLookup } from "./adapters/github-pull-request.js";
 import { WindowsTerminalAdapter } from "./adapters/windows-terminal.js";
 import { existsSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { buildCaptainPrompt } from "./captain.js";
 import { isKnownModel, recommendModel } from "./models.js";
 import type { Agent } from "./domain.js";
 import { defaultDatabasePath, FleetStore } from "./storage.js";
 import { ensureSettings, type FleetSettings } from "./settings.js";
+import { buildWorkerPrompt } from "./worker.js";
+import { ensurePullRequest, validateWorktreeReadyForCompletion } from "./completion.js";
+import { initializeProjectContext } from "./project-context.js";
 
 export class FleetService {
   constructor(
@@ -20,7 +23,15 @@ export class FleetService {
 
   launchAgent(agentId: string): Agent {
     const context = this.store.getAgentContext(agentId);
+    if (context.agent.provider !== "codex") {
+      throw new Error(`Provider ${context.agent.provider} is not implemented yet; only Codex workers can be launched.`);
+    }
+    const codexPath = process.env.FLEET_CODEX_PATH ?? join(process.env.APPDATA ?? "", "npm", "codex.cmd");
+    if (!existsSync(codexPath)) {
+      throw new Error("Codex CLI was not found. Set FLEET_CODEX_PATH to the codex.cmd executable.");
+    }
     const worktree = this.worktrees.create(context.project.rootPath, agentId);
+    const projectContext = initializeProjectContext(this.settings, context.project.name, worktree.path);
     const terminalTitle = `FLEET | ${context.project.name} | ${agentId.slice(0, 8)}`;
     const agent = this.store.provisionAgent(agentId, {
       branch: worktree.branch,
@@ -32,6 +43,19 @@ export class FleetService {
       workingDirectory: worktree.path,
       taskTitle: context.task.title,
       agentId,
+      taskId: context.task.id,
+      codexPath,
+      fleetCliPath: resolve(process.argv[1] ?? join(process.cwd(), "dist", "cli.js")),
+      databasePath: process.env.FLEET_DB || defaultDatabasePath(),
+      model: context.agent.model,
+      prompt: buildWorkerPrompt({
+        ...context,
+        agent: { ...context.agent, branch: worktree.branch, worktreePath: worktree.path },
+      }, {
+        fleetCliPath: resolve(process.argv[1] ?? join(process.cwd(), "dist", "cli.js")),
+        controlRoot: process.cwd(),
+        projectContext,
+      }),
     });
     return agent;
   }
@@ -52,6 +76,18 @@ export class FleetService {
       model,
       prompt: buildCaptainPrompt(this.store.snapshot(), this.settings),
     });
+  }
+
+  completeAgent(agentId: string, message: string): Agent {
+    const context = this.store.getAgentContext(agentId);
+    if (context.agent.status === "completed") return context.agent;
+    if (!context.agent.worktreePath || !context.agent.branch) {
+      throw new Error(`Agent ${agentId} has no provisioned worktree`);
+    }
+    ensurePullRequest(context.agent.worktreePath, context.agent.branch);
+    const proof = validateWorktreeReadyForCompletion(context.agent.worktreePath, context.agent.branch);
+    const summary = `${message}\nCommit: ${proof.commit}\nUpstream: ${proof.upstream}\nPull request: ${proof.pullRequestUrl}`;
+    return this.store.updateAgentStatus(agentId, "completed", summary);
   }
 
   reconcileProject(projectRoot: string): Agent[] {

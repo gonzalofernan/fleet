@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { cloneManagedProject, createManagedProject, ensureSettings, initializeLoopDirectory, initializeProjectDirectory, settingsForWorkspace } from "./settings.js";
+import { initializeProjectContext } from "./project-context.js";
 
 test("initializes a settings file and separated workspace directories", () => {
   const home = mkdtempSync(join(tmpdir(), "fleet-settings-"));
@@ -24,6 +25,10 @@ test("creates explicit project and loop metadata layouts", () => {
   const projectPath = initializeProjectDirectory(settings, "Billing API");
   const loopPath = initializeLoopDirectory(settings, "Daily review");
 
+  const context = initializeProjectContext(settings, "Billing API", projectPath);
+  assert.equal(existsSync(context.project), true);
+  assert.equal(existsSync(context.status), true);
+  assert.equal(existsSync(context.decisions), true);
   assert.equal(existsSync(join(projectPath, "PROJECT.md")), true);
   assert.equal(existsSync(join(loopPath, "LOOP.md")), true);
   assert.equal(existsSync(join(loopPath, "runs")), true);

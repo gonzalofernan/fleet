@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
-import type { Agent, AgentContext, AgentStatus, FleetMessage, FleetSnapshot, Loop, MessagePriority, MessageStatus, MessageType, Project, PullRequestMerge, Task } from "./domain.js";
+import { AGENT_STATUSES, type Agent, type AgentContext, type AgentReply, type AgentStatus, type FleetActivity, type FleetMessage, type FleetSnapshot, type Loop, type MessagePriority, type MessageStatus, type MessageType, type Project, type PullRequestMerge, type Task } from "./domain.js";
 import { recommendModel } from "./models.js";
 
 export class FleetStore {
@@ -13,6 +13,7 @@ export class FleetStore {
     mkdirSync(dirname(databasePath), { recursive: true });
     this.database = new DatabaseSync(databasePath);
     this.database.exec(`
+      PRAGMA busy_timeout = 5000;
       PRAGMA foreign_keys = ON;
       CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY,
@@ -78,6 +79,20 @@ export class FleetStore {
         base_ref_name TEXT NOT NULL,
         merged_at TEXT NOT NULL,
         detected_at TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS agent_sessions (
+        agent_id TEXT PRIMARY KEY REFERENCES agents(id),
+        session_id TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        attached_at TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS agent_replies (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL REFERENCES agents(id),
+        text TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        delivered_at TEXT
       ) STRICT;
     `);
     this.addColumnIfMissing("agents", "branch", "TEXT");
@@ -155,6 +170,51 @@ export class FleetStore {
     ).run(message.id, message.agentId, message.taskId, message.type, message.priority, message.text, message.status, Number(message.requiresHuman), message.createdAt);
     this.addEvent("message", message.id, "created", details);
     return message;
+  }
+
+  queueAgentReply(agentId: string, text: string): AgentReply {
+    const context = this.getAgentContext(agentId);
+    if (!["provisioning", "running", "waiting"].includes(context.agent.status)) {
+      throw new Error(`Agent ${agentId} is not active; cannot deliver a reply from ${context.agent.status}`);
+    }
+    const reply: AgentReply = { id: randomUUID(), agentId, text, status: "queued", createdAt: now(), deliveredAt: null };
+    this.database.prepare(
+      "INSERT INTO agent_replies (id, agent_id, text, status, created_at, delivered_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(reply.id, reply.agentId, reply.text, reply.status, reply.createdAt, reply.deliveredAt);
+    this.addEvent("agent", agentId, "reply_queued", { replyId: reply.id, text });
+    return reply;
+  }
+
+  listQueuedAgentReplies(agentId: string): AgentReply[] {
+    const rows = this.database.prepare(
+      "SELECT id, agent_id AS agentId, text, status, created_at AS createdAt, delivered_at AS deliveredAt FROM agent_replies WHERE agent_id = ? AND status = 'queued' ORDER BY created_at",
+    ).all(agentId) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.mapAgentReply(row));
+  }
+
+  markAgentReplyDelivered(replyId: string): AgentReply {
+    const deliveredAt = now();
+    this.database.prepare("UPDATE agent_replies SET status = 'delivered', delivered_at = ? WHERE id = ? AND status = 'queued'").run(deliveredAt, replyId);
+    const row = this.database.prepare(
+      "SELECT id, agent_id AS agentId, text, status, created_at AS createdAt, delivered_at AS deliveredAt FROM agent_replies WHERE id = ?",
+    ).get(replyId) as Record<string, unknown> | undefined;
+    if (!row) throw new Error(`Unknown agent reply: ${replyId}`);
+    return this.mapAgentReply(row);
+  }
+
+  attachAgentSession(agentId: string, sessionId: string, startedAt: string): void {
+    this.requireAgent(agentId);
+    this.database.prepare(
+      "INSERT INTO agent_sessions (agent_id, session_id, started_at, attached_at) VALUES (?, ?, ?, ?) ON CONFLICT(agent_id) DO UPDATE SET session_id = excluded.session_id, started_at = excluded.started_at, attached_at = excluded.attached_at",
+    ).run(agentId, sessionId, startedAt, now());
+    this.addEvent("agent", agentId, "session_attached", { sessionId, startedAt });
+  }
+
+  clearAgentSession(agentId: string): void {
+    this.requireAgent(agentId);
+    const session = this.database.prepare("SELECT session_id AS sessionId FROM agent_sessions WHERE agent_id = ?").get(agentId) as { sessionId?: string } | undefined;
+    this.database.prepare("DELETE FROM agent_sessions WHERE agent_id = ?").run(agentId);
+    if (session?.sessionId) this.addEvent("agent", agentId, "session_detached", { sessionId: session.sessionId });
   }
 
   listMessages(status: MessageStatus | null = null): FleetMessage[] {
@@ -258,6 +318,8 @@ export class FleetStore {
       if (taskCompleted) {
         this.database.prepare("UPDATE tasks SET status = 'completed' WHERE id = ?").run(context.task.id);
         this.addEvent("task", context.task.id, "completed_from_pull_request_merge", { agentId, pullRequest: merge });
+      } else {
+        this.database.prepare("UPDATE agents SET status = 'waiting' WHERE task_id = ? AND id <> ? AND status IN ('requested', 'provisioning', 'running')").run(context.task.id, agentId);
       }
       this.database.exec("COMMIT");
       return {
@@ -270,6 +332,14 @@ export class FleetStore {
       this.database.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  getProject(projectId: string): Project {
+    const row = this.database.prepare(
+      "SELECT id, name, root_path AS rootPath, created_at AS createdAt FROM projects WHERE id = ?",
+    ).get(projectId) as unknown as Project | undefined;
+    if (!row) throw new Error(`Unknown project: ${projectId}`);
+    return row;
   }
 
   findAgentByWorktree(worktreePath: string): Agent | null {
@@ -299,7 +369,44 @@ export class FleetStore {
       agents: this.database.prepare("SELECT id, task_id AS taskId, role, provider, model, status, branch, worktree_path AS worktreePath, terminal_title AS terminalTitle, created_at AS createdAt FROM agents ORDER BY created_at").all() as unknown as Agent[],
       loops: (this.database.prepare("SELECT id, project_id AS projectId, title, schedule, enabled, directory_path AS directoryPath, created_at AS createdAt FROM loops ORDER BY created_at").all() as Array<Omit<Loop, "enabled"> & { enabled: number }>).map((loop) => ({ ...loop, enabled: Boolean(loop.enabled) })),
       messages: this.listMessages(),
+      recentActivity: this.listRecentActivity(),
     };
+  }
+
+  listRecentActivity(limit = 10): FleetActivity[] {
+    const boundedLimit = Math.max(1, Math.min(50, Math.trunc(limit)));
+    const rows = this.database.prepare(`
+      SELECT
+        e.id,
+        e.entity_type AS entityType,
+        e.entity_id AS entityId,
+        e.event_type AS eventType,
+        e.payload,
+        e.created_at AS createdAt,
+        COALESCE(project_direct.name, project_related.name) AS projectName,
+        COALESCE(agent_direct.role, agent_related.role) AS agentRole,
+        COALESCE(task_direct.title, task_related.title) AS taskTitle
+      FROM events e
+      LEFT JOIN projects project_direct
+        ON e.entity_type = 'project' AND project_direct.id = e.entity_id
+      LEFT JOIN tasks task_direct
+        ON e.entity_type = 'task' AND task_direct.id = e.entity_id
+      LEFT JOIN agents agent_direct
+        ON e.entity_type = 'agent' AND agent_direct.id = e.entity_id
+      LEFT JOIN messages message_direct
+        ON e.entity_type = 'message' AND message_direct.id = e.entity_id
+      LEFT JOIN agents agent_related
+        ON agent_related.id = message_direct.agent_id
+      LEFT JOIN tasks task_related
+        ON task_related.id = COALESCE(task_direct.id, agent_direct.task_id, message_direct.task_id, agent_related.task_id)
+      LEFT JOIN loops loop_direct
+        ON e.entity_type = 'loop' AND loop_direct.id = e.entity_id
+      LEFT JOIN projects project_related
+        ON project_related.id = COALESCE(task_direct.project_id, task_related.project_id, loop_direct.project_id)
+      ORDER BY e.created_at DESC
+      LIMIT ?
+    `).all(boundedLimit) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.mapActivity(row));
   }
 
   getAgentContext(agentId: string): AgentContext {
@@ -342,11 +449,30 @@ export class FleetStore {
     }
     this.database.prepare(`
       UPDATE agents
-      SET status = 'waiting', branch = ?, worktree_path = ?, terminal_title = ?
+      SET status = 'provisioning', branch = ?, worktree_path = ?, terminal_title = ?
       WHERE id = ?
     `).run(details.branch, details.worktreePath, details.terminalTitle, agentId);
     this.addEvent("agent", agentId, "provisioned", details);
-    return { ...context.agent, status: "waiting", ...details };
+    return { ...context.agent, status: "provisioning", ...details };
+  }
+
+  updateAgentStatus(agentId: string, status: AgentStatus, message?: string): Agent {
+    if (!AGENT_STATUSES.includes(status)) throw new Error(`Unknown agent status: ${status}`);
+    const context = this.getAgentContext(agentId);
+    this.database.prepare("UPDATE agents SET status = ? WHERE id = ?").run(status, agentId);
+    const taskStatus = status === "running" ? "running" : status === "completed" ? "review" : status === "failed" ? "failed" : null;
+    if (taskStatus) this.database.prepare("UPDATE tasks SET status = ? WHERE id = ?").run(taskStatus, context.task.id);
+    this.addEvent("agent", agentId, "status", { status, message: message ?? null });
+    if (message) {
+      this.sendMessage({
+        agentId,
+        taskId: context.task.id,
+        type: status === "completed" ? "completed" : status === "failed" ? "blocked" : "info",
+        priority: status === "failed" ? "high" : "normal",
+        text: message,
+      });
+    }
+    return { ...context.agent, status };
   }
 
   close(): void {
@@ -383,6 +509,38 @@ export class FleetStore {
       reminderAt: row.reminderAt ? String(row.reminderAt) : null, lastRemindedAt: row.lastRemindedAt ? String(row.lastRemindedAt) : null,
       projectName: row.projectName ? String(row.projectName) : null, agentRole: row.agentRole ? String(row.agentRole) : null,
       taskTitle: row.taskTitle ? String(row.taskTitle) : null, createdAt: String(row.createdAt),
+    };
+  }
+
+  private mapAgentReply(row: Record<string, unknown>): AgentReply {
+    return {
+      id: String(row.id),
+      agentId: String(row.agentId),
+      text: String(row.text),
+      status: String(row.status) as AgentReply["status"],
+      createdAt: String(row.createdAt),
+      deliveredAt: row.deliveredAt ? String(row.deliveredAt) : null,
+    };
+  }
+
+  private mapActivity(row: Record<string, unknown>): FleetActivity {
+    let payload: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(String(row.payload));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed as Record<string, unknown>;
+    } catch {
+      payload = {};
+    }
+    return {
+      id: String(row.id),
+      entityType: String(row.entityType),
+      entityId: String(row.entityId),
+      eventType: String(row.eventType),
+      payload,
+      createdAt: String(row.createdAt),
+      projectName: row.projectName ? String(row.projectName) : null,
+      agentRole: row.agentRole ? String(row.agentRole) : null,
+      taskTitle: row.taskTitle ? String(row.taskTitle) : null,
     };
   }
 
