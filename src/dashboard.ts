@@ -12,7 +12,9 @@ export function renderDashboard(snapshot: FleetSnapshot, options: DashboardOptio
   const projectById = new Map(snapshot.projects.map((project) => [project.id, project]));
   const activeAgents = snapshot.agents.filter((agent) => ACTIVE_AGENT_STATUSES.has(agent.status));
   const unverified = snapshot.agents.filter((agent) => agent.status === "unknown");
-  const pendingHuman = snapshot.messages.filter((message) => message.requiresHuman && message.status !== "resolved");
+  const pendingMessageIds = new Set(snapshot.decisions.filter((decision) => decision.status === "pending").map((decision) => decision.messageId));
+  const pendingHuman = snapshot.messages.filter((message) => pendingMessageIds.has(message.id));
+  const activeRuntimes = snapshot.runtimes.filter((runtime) => ["starting", "running", "cancelling"].includes(runtime.status));
   const activeTaskIds = new Set(activeAgents.map((agent) => agent.taskId));
   const activeTasks = snapshot.tasks.filter((task) => ACTIVE_TASK_STATUSES.has(task.status) || activeTaskIds.has(task.id));
   const recentActivity = (snapshot.recentActivity ?? []).slice(0, options.recentActivityLimit ?? 8);
@@ -22,7 +24,7 @@ export function renderDashboard(snapshot: FleetSnapshot, options: DashboardOptio
     "  FLEET | CURRENT STATUS",
     "  ------------------------------------------------------------",
     `  Projects: ${snapshot.projects.length} | Active tasks: ${activeTasks.length} | Active agents: ${activeAgents.length}`,
-    `  Decisions: ${pendingHuman.length} | Unverified workers: ${unverified.length} | Loops: ${snapshot.loops.length}`,
+    `  Decisions: ${pendingHuman.length} | Live runtimes: ${activeRuntimes.length} | Loops: ${snapshot.loops.length}`,
     "",
     "  ACTIVE WORK",
   ];
@@ -31,13 +33,19 @@ export function renderDashboard(snapshot: FleetSnapshot, options: DashboardOptio
     const project = projectById.get(task.projectId);
     const agents = snapshot.agents.filter((agent) => agent.taskId === task.id && ACTIVE_AGENT_STATUSES.has(agent.status));
     if (agents.length === 0) return [[task.status, project?.name ?? "-", task.title, "-", formatTime(task.createdAt)]];
-    return agents.map((agent) => [
+    return agents.map((agent) => {
+      const runtime = snapshot.runtimes.find((entry) => entry.ownerId === agent.id && ["starting", "running", "cancelling"].includes(entry.status));
+      return [
       agent.status,
       project?.name ?? "-",
       task.title,
       `${agent.role} (${agent.id.slice(0, 8)})`,
       formatTime(agent.createdAt),
-    ]);
+      task.spec.kind,
+      task.spec.deliveryMode,
+      runtime?.status ?? "no runtime",
+    ];
+    });
   });
   lines.push(...renderRunningItems(runningRows));
 
@@ -73,10 +81,10 @@ type DashboardRow = string[];
 
 function renderRunningItems(rows: DashboardRow[]): string[] {
   if (rows.length === 0) return ["  - none"];
-  return rows.flatMap(([status, project, task, agent, since]) => [
+  return rows.flatMap(([status, project, task, agent, since, kind = "-", delivery = "-", runtime = "no runtime"]) => [
     `  - ${fit(`${status} | ${project} | ${agent}`, 88)}`,
     `    Task: ${fit(task, 82)}`,
-    `    Since: ${since}`,
+    `    ${kind} -> ${delivery} | Runtime: ${runtime} | Since: ${since}`,
   ]);
 }
 
@@ -129,6 +137,7 @@ function summarizeRecentProjects(snapshot: FleetSnapshot, activity: FleetActivit
     messageByProjectId.set(task.projectId, messages);
   }
 
+  const pendingMessageIds = new Set(snapshot.decisions.filter((decision) => decision.status === "pending").map((decision) => decision.messageId));
   return snapshot.projects
     .map((project) => {
       const projectTasks = snapshot.tasks.filter((task) => task.projectId === project.id);
@@ -142,7 +151,7 @@ function summarizeRecentProjects(snapshot: FleetSnapshot, activity: FleetActivit
         ...projectMessages.map((message) => message.createdAt),
         ...projectActivity.map((entry) => entry.createdAt),
       ];
-      const pending = projectMessages.some((message) => message.requiresHuman && message.status !== "resolved");
+      const pending = projectMessages.some((message) => pendingMessageIds.has(message.id));
       const active = projectAgents.filter((agent) => ACTIVE_AGENT_STATUSES.has(agent.status)).length;
       const latestTask = [...projectTasks].sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
       const state = pending ? "needs human decision" : active > 0 ? `${active} active agent${active === 1 ? "" : "s"}` : latestTask?.status ?? "registered";
@@ -166,6 +175,7 @@ function describeActivity(activity: FleetActivity): string {
   if (activity.eventType === "recovered") return `Worker recovered: ${role}`;
   if (activity.eventType === "reply_queued") return `Reply queued for ${role}`;
   if (activity.eventType === "session_attached") return `Codex session attached to ${role}`;
+  if (activity.eventType === "legacy_completion_restored") return `Historical completed delivery restored for ${role}`;
   return `${activity.eventType} ${activity.entityType}`;
 }
 

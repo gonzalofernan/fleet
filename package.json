@@ -2,7 +2,7 @@
   "name": "fleet",
   "version": "0.1.0",
   "private": true,
-  "description": "A local, terminal-first control plane for coding agents.",
+  "description": "A local, terminal-first control plane for supervised agentic work.",
   "type": "module",
   "bin": {
     "fleet": "dist/cli.js"

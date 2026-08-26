@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { buildCodexQueueScript, findStartedCodexSession, formatFleetMessageForCaptain } from "./codex-bridge.js";
+import { messageFixture } from "./test-fixtures.js";
 
 test("finds the Codex session created for a bridge working directory", () => {
   const root = mkdtempSync(join(tmpdir(), "fleet-bridge-"));
@@ -19,26 +20,21 @@ test("finds the Codex session created for a bridge working directory", () => {
 });
 
 test("formats a Fleet message with provenance and human intervention state", () => {
-  const text = formatFleetMessageForCaptain({
-    id: "message-1",
-    agentId: "agent-1",
-    taskId: "task-1",
+  const text = formatFleetMessageForCaptain(messageFixture({
     type: "approval",
     priority: "high",
     text: "Necesito confirmar el formato de creación.",
-    status: "unread",
     requiresHuman: true,
-    reminderAt: null,
-    lastRemindedAt: null,
+    decisionId: "decision-1",
     projectName: "fleet",
     agentRole: "implementer",
     taskTitle: "Separar checkout",
-    createdAt: "2026-08-26T10:00:00.000Z",
-  });
+  }));
 
   assert.match(text, /fleet \/ implementer \/ Separar checkout/);
   assert.match(text, /Requiere intervención humana: sí/);
   assert.match(text, /Necesito confirmar/);
+  assert.match(text, /agent reply --id "agent-1" --message "message-1"/);
 });
 
 test("queues the complete Fleet message as one native Windows argument", () => {

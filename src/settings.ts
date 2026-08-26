@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 export interface FleetSettings {
-  version: 1;
+  version: 2;
   workspaceRoot: string;
   projectsDirectory: string;
   loopsDirectory: string;
@@ -13,6 +13,12 @@ export interface FleetSettings {
   defaultModel: string;
   terminalBackend: "windows-terminal";
   maxConcurrentAgents: number;
+  defaultProvider: "codex";
+  heartbeatIntervalMs: number;
+  runtimeStaleMs: number;
+  pullRequestPollMs: number;
+  loopPollMs: number;
+  autoCleanupWorktrees: boolean;
 }
 
 export function defaultSettingsPath(): string {
@@ -28,7 +34,7 @@ export function defaultSettings(): FleetSettings {
 export function settingsForWorkspace(workspaceRoot: string): FleetSettings {
   const root = resolve(workspaceRoot);
   return {
-    version: 1,
+    version: 2,
     workspaceRoot: root,
     projectsDirectory: join(root, "projects"),
     loopsDirectory: join(root, "loops"),
@@ -37,26 +43,32 @@ export function settingsForWorkspace(workspaceRoot: string): FleetSettings {
     defaultModel: "gpt-5.6-luna",
     terminalBackend: "windows-terminal",
     maxConcurrentAgents: 6,
+    defaultProvider: "codex",
+    heartbeatIntervalMs: 750,
+    runtimeStaleMs: 30_000,
+    pullRequestPollMs: 5 * 60_000,
+    loopPollMs: 30_000,
+    autoCleanupWorktrees: true,
   };
 }
 
 export function ensureSettings(path = defaultSettingsPath()): FleetSettings {
   const settings = existsSync(path)
-    ? readSettings(path)
+    ? writeSettings(path, readSettings(path))
     : writeSettings(path, defaultSettings());
   ensureWorkspaceDirectories(settings);
   return settings;
 }
 
 export function readSettings(path = defaultSettingsPath()): FleetSettings {
-  const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<FleetSettings>;
-  if (parsed.version !== 1 || !parsed.workspaceRoot || !parsed.projectsDirectory || !parsed.loopsDirectory || !parsed.worktreesDirectory || !parsed.archiveDirectory) {
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<FleetSettings> & { version?: number };
+  if (![1, 2].includes(parsed.version ?? 0) || !parsed.workspaceRoot || !parsed.projectsDirectory || !parsed.loopsDirectory || !parsed.worktreesDirectory || !parsed.archiveDirectory) {
     throw new Error(`Invalid Fleet settings: ${path}`);
   }
   return {
     ...defaultSettings(),
     ...parsed,
-    version: 1,
+    version: 2,
     terminalBackend: "windows-terminal",
   } as FleetSettings;
 }

@@ -1,59 +1,80 @@
 # Fleet
 
-Fleet is a local, terminal-first control plane for coding agents. You speak to a captain agent; the captain will use Fleet to create, supervise, and retire workers.
+Fleet is a local, terminal-first control plane for agentic work. You speak to one captain; the captain creates explicit tasks, delegates them to supervised workers, routes decisions, and retires their processes and workspaces.
 
-Fleet persists projects, tasks, and agents in SQLite, provisions isolated Git worktrees, and launches real Codex workers in Windows Terminal tabs. Workers report lifecycle updates, decisions, blockers, and validation results through the Fleet registry.
+Fleet currently uses the Codex CLI authenticated through ChatGPT. The provider boundary is adapter-based, while task profiles support coding, review, research, browser, writing, and operations work.
 
 ## Requirements
 
 - Node.js 24 or newer
 - Git
+- GitHub CLI for `git-pr` delivery
+- Codex CLI for captain and worker sessions
 
 ## Development
 
 ```powershell
 npm install
 npm test
-node dist/cli.js project create fleet
-node dist/cli.js project clone existing-project --url https://github.com/example/existing-project.git
-node dist/cli.js task create --project <project-id> --title "Add Windows Terminal adapter"
-node dist/cli.js agent request --task <task-id> --role implementer
-node dist/cli.js agent launch <agent-id>
 node dist/cli.js dashboard
-node dist/cli.js status
-node dist/cli.js github sync
+node dist/cli.js task create --project <id> --title "Add supervisor health check" --kind coding --delivery git-pr --accept "Tests pass"
+node dist/cli.js agent request --task <id> --role implementer
+node dist/cli.js agent launch <agent-id>
+node dist/cli.js loop create --title "Weekly audit" --project <id> --kind review --schedule "0 9 * * 1"
+node dist/cli.js loop run <loop-id>
 ```
 
-`node dist/cli.js dashboard` is the human-readable Fleet overview. It shows active tasks and agents, unverified workers, recent projects, recent lifecycle activity, and unresolved human decisions. Use `--recent-projects <n>` or `--recent-activity <n>` to keep the terminal compact.
+`dashboard` is the compact human-readable overview. It shows active tasks, agents and runtimes, recent projects, recent events, and only canonical pending decisions.
 
-Fleet stores control-plane state in `%LOCALAPPDATA%\\Fleet\\fleet.db`. This keeps the captain and workers on one durable registry even when they run from different worktrees.
+## Runtime
 
-On first start, Fleet creates `%APPDATA%\\Fleet\\settings.json` and a workspace at `%USERPROFILE%\\Fleet` with this layout:
+Fleet stores its source of truth in `%LOCALAPPDATA%\Fleet\fleet.db`. Schema migrations preserve existing history while introducing task attempts, supervised runtimes, heartbeats, outbox claims, retries, decisions, and loop runs.
+
+Each captain or worker tab starts one Fleet supervisor. That supervisor owns exactly one provider child process and its session, updates a heartbeat, claims messages atomically, retries failed delivery, and terminates the exact child process tree on cancellation. The former `captain-host`, `captain-bridge`, and `worker-bridge` processes no longer exist. The first launch removes only legacy captain bridges that match this exact Fleet CLI path.
+
+Workers use execution profiles instead of inheriting captain permissions. The captain remains a trusted `danger-full-access` process; coding and writable workers use `workspace-write`; review and research workers use `read-only`. Workers never receive `danger-full-access` by default.
+
+## Task Delivery
+
+Every task has a durable `TaskSpec`: objective, kind, delivery mode, acceptance criteria, context paths, risk, and execution profile. Every launch creates a separate `TaskAttempt` linked atomically to its runtime.
+
+`git-pr` workers must validate, commit, push, create a pull request, and prove that local `HEAD` matches its upstream before Fleet accepts completion. The terminal and Codex session close after delivery. When the PR is merged, Fleet completes the task and removes the worktree and local Fleet branch idempotently.
+
+`report-only` and `conversation-only` tasks do not create commits or pull requests unless their TaskSpec explicitly requires Git delivery.
+
+## Messaging
+
+Worker messages and captain replies are transactional outboxes. A consumer leases each item with a claim token, retries transient failures, and cannot deliver the same record concurrently from two supervisors. Approval, question, and blocker messages create linked decisions. A decision remains pending until the captain's linked reply is actually delivered to the worker.
+
+When an agent becomes terminal, Fleet discards its stale messages and replies and cancels unresolved decisions. Late messages remain in SQLite as discarded diagnostics instead of re-entering the live queue.
+
+## Project Context
+
+Fleet creates `PROJECT.md`, `STATUS.md`, and `DECISIONS.md` inside each managed project repository. `PROJECT.md` contains stable knowledge, `DECISIONS.md` contains durable choices, and `STATUS.md` is a recoverable projection generated from SQLite tasks, events, agents, and decisions. SQLite remains authoritative if writing the projection fails.
+
+The workspace defaults to `%USERPROFILE%\Fleet`:
 
 ```text
 Fleet/
   projects/    long-lived repositories
-  loops/       recurring instructions, LOOP.md metadata, and run history
-  worktrees/   worker worktrees
-  archive/     retired projects, loops, and runs
+  loops/       recurring TaskSpecs and run history
+  worktrees/   isolated worker checkouts
+  archive/     retired resources
 ```
 
-The settings file is the configuration source of truth. SQLite remains the runtime index, so the captain can distinguish projects, loops, tasks, and agents without scanning the workspace. Fleet does not maintain a parallel global context directory: durable project context is generated inside each repository after it is added or cloned.
+## Loops
 
-The captain and workers use the named Windows Terminal window `fleet`. The captain runs as a native Codex CLI session; each worker runs Codex in its own worktree and publishes structured messages into SQLite with `fleet message send`. Each project contains its durable `PROJECT.md`, `STATUS.md`, and `DECISIONS.md` context files, so every worktree can read the same project memory naturally. Small bridge processes associate each live Codex session with Fleet and use `codex queue` for captain-to-worker replies and worker-to-captain events. The captain also checks this durable registry at the beginning of each operational turn.
+Loops are reusable TaskSpecs. `manual` loops run only on request. Scheduled loops support `@every 30m` style intervals and five-field cron expressions. The captain supervisor evaluates due loops, records every `LoopRun`, creates a task and attempt, and launches it through the same runtime path as ordinary work.
 
-Worker completion is gated: Fleet accepts `agent complete` only when the assigned worktree is clean, the expected branch has a commit, an upstream remote exists, local `HEAD` matches that upstream, and `gh pr view` returns a pull request URL. Workers are instructed to run `git push -u origin HEAD` and `gh pr create --fill` before requesting completion; otherwise Fleet keeps the agent waiting and reports the missing delivery step to the captain. After the worker reaches a terminal state, Fleet removes its Codex session and runtime session pointer; the worker shell exits so Windows Terminal can close that tab, while the completed agent record remains as history.
+## Verification
 
-Fleet also checks GitHub every five minutes while the Captain Host is running. It queries `gh` only for merged PRs whose head branch exactly matches a registered active agent branch, records the PR number, URL and merge timestamp, and then completes the agent. The task is completed only when it has no other active agents. You can run the same check on demand with `fleet github sync` (or restrict it with `--project <repository-path>`).
+```powershell
+npm run check
+npm test
+$env:FLEET_RUN_WINDOWS_E2E = "1"
+npm test
+```
 
-Model routing defaults to GPT-5.6 Luna for the captain and routine work, Terra for implementation and review, and Sol for architecture or high-risk tasks. The captain can override the recommendation per task.
+The last command enables the opt-in Windows child-process E2E. Normal tests use real SQLite databases with fake provider/process adapters and do not open terminals or consume Codex usage.
 
-## Design boundaries
-
-- The user does not operate Fleet commands directly; a captain agent will.
-- Markdown charters define agent behavior. SQLite stores runtime state.
-- Every modifying worker will eventually receive its own branch and Git worktree.
-- The first coding-model adapter will target Codex CLI authenticated with ChatGPT, not the API.
-- The captain launches with `danger-full-access` and `never` approvals on this local machine; worker permissions will be configured separately by role.
-
-See [architecture](docs/architecture.md) for the planned components and [charters](charters/) for the instruction hierarchy.
+See [architecture](docs/architecture.md) and [charters](charters/) for the component and instruction boundaries.

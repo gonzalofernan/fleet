@@ -1,53 +1,51 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { defaultTaskSpec } from "./domain.js";
+import { agentFixture, taskFixture } from "./test-fixtures.js";
 import { buildWorkerPrompt } from "./worker.js";
 
-test("builds a worker prompt with task context and Fleet reporting commands", () => {
-  const prompt = buildWorkerPrompt({
-    agent: {
-      id: "agent-123",
-      taskId: "task-123",
-      role: "implementer",
-      provider: "codex",
-      model: "gpt-5.6-terra",
-      status: "provisioning",
-      branch: "fleet/agent-agent12",
-      worktreePath: "C:\\Fleet\\worktrees\\agent12",
-      terminalTitle: "FLEET | fleet | agent12",
-      createdAt: "2026-08-26T10:00:00.000Z",
-    },
-    task: {
-      id: "task-123",
-      projectId: "project-123",
-      title: "Implement worker launch",
-      status: "pending",
-      createdAt: "2026-08-26T10:00:00.000Z",
-    },
-    project: {
-      id: "project-123",
-      name: "fleet",
-      rootPath: "C:\\Fleet\\projects\\fleet",
-      createdAt: "2026-08-26T10:00:00.000Z",
-    },
-  }, {
-    fleetCliPath: "C:\\Fleet\\dist\\cli.js",
-    controlRoot: process.cwd(),
-    projectContext: {
-      directory: "C:\\Fleet\\projects\\fleet",
-      project: "C:\\Fleet\\projects\\fleet\\PROJECT.md",
-      status: "C:\\Fleet\\projects\\fleet\\STATUS.md",
-      decisions: "C:\\Fleet\\projects\\fleet\\DECISIONS.md",
-    },
-  });
+const project = { id: "project-1", name: "fleet", rootPath: "C:\\Fleet\\projects\\fleet", createdAt: "2026-08-26T10:00:00.000Z" };
+const options = {
+  fleetCliPath: "C:\\Fleet\\dist\\cli.js",
+  controlRoot: process.cwd(),
+  attemptId: "attempt-1",
+  projectContext: {
+    directory: project.rootPath,
+    project: `${project.rootPath}\\PROJECT.md`,
+    status: `${project.rootPath}\\STATUS.md`,
+    decisions: `${project.rootPath}\\DECISIONS.md`,
+  },
+};
 
-  assert.match(prompt, /Implement worker launch/);
-  assert.match(prompt, /FLEET TASK BRIEF \(AUTHORITATIVE\)/);
-  assert.match(prompt, /This is the assigned task\. Do not report that no task brief was provided/);
-  assert.match(prompt, /gpt-5\.6-terra/);
-  assert.match(prompt, /Fleet project context \(authoritative\): C:\\Fleet\\projects\\fleet\\PROJECT\.md/);
-  assert.match(prompt, /Do not substitute the tracked projects\/<name>\/PROJECT\.md/);
-  assert.match(prompt, /message send --agent "agent-123" --task "task-123"/);
-  assert.match(prompt, /charters[\\/]roles[\\/]implementer\.md/);
-  assert.match(prompt, /type approval/);
-  assert.match(prompt, /type completed/);
+test("builds a coding prompt with an explicit TaskSpec and linked outbox commands", () => {
+  const task = taskFixture({
+    title: "Implement worker launch",
+    spec: defaultTaskSpec("Implement worker launch", { acceptanceCriteria: ["Tests pass"] }),
+  });
+  const prompt = buildWorkerPrompt({
+    agent: agentFixture({ status: "provisioning", branch: "fleet/agent-agent12", worktreePath: "C:\\Fleet\\worktrees\\agent12" }),
+    task,
+    project,
+  }, options);
+
+  assert.match(prompt, /FLEET TASK SPEC \(AUTHORITATIVE\)/);
+  assert.match(prompt, /Attempt id: attempt-1/);
+  assert.match(prompt, /Acceptance criteria:\n- Tests pass/);
+  assert.match(prompt, /--attempt "attempt-1"/);
+  assert.match(prompt, /--dedupe-key "attempt:attempt-1:decision:<name>"/);
+  assert.match(prompt, /git push -u origin HEAD/);
+  assert.match(prompt, /gh pr create/);
+});
+
+test("does not require Git delivery for research work", () => {
+  const title = "Research transcription models";
+  const prompt = buildWorkerPrompt({
+    agent: agentFixture({ role: "researcher", executionProfile: "worker-research", status: "provisioning" }),
+    task: taskFixture({ title, spec: defaultTaskSpec(title, { kind: "research", deliveryMode: "report-only" }) }),
+    project,
+  }, options);
+
+  assert.match(prompt, /Delivery mode: report-only/);
+  assert.match(prompt, /Do not create a commit, push, or pull request/);
+  assert.doesNotMatch(prompt, /git push -u origin HEAD/);
 });

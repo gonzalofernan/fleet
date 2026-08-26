@@ -2,58 +2,74 @@
 
 ## Goal
 
-Fleet lets a human communicate with one captain agent. The captain delegates work to disposable coding workers, then reports only decisions and outcomes that need the human.
+Fleet gives a human one conversational captain while supervised workers execute bounded coding and non-coding tasks. Operational state must remain correct when terminals close, providers fail, messages race, or pull requests are merged outside Fleet.
 
-## First usable slice
+## Shape
 
-The first real workflow is deliberately narrow:
-
-1. The captain registers Fleet as a project.
-2. The captain creates a task.
-3. Fleet creates a Git worktree and a Windows Terminal tab in the shared `fleet` window.
-4. A Codex worker receives the task context, reports progress through Fleet, and completes the task on its own branch.
-5. The human reviews the pull request.
-
-## Components
+Fleet is a modular monolith with multiple local runtime processes:
 
 ```text
-captain agent
-  -> Fleet CLI / future MCP server
-    -> daemon (scheduler and supervisor)
-      -> SQLite state, messages, replies, and append-only events
-      -> Git worktree adapter
-      -> Windows Terminal adapter
-      -> coding-agent adapters (Codex first, Claude Code later)
-      -> Codex session bridges for queued inter-agent messages
+human
+  -> captain provider session
+    -> Fleet CLI
+      -> SQLite control plane and append-only events
+      -> terminal, Git, GitHub, provider, and project-context adapters
+
+Windows Terminal tab
+  -> Fleet runtime supervisor
+    -> one provider child process
+    -> one provider session
+    -> heartbeat, cancellation, outbox delivery, and maintenance
 ```
 
-Fleet begins as a modular monolith. Adapters are process-local interfaces, not network services.
+There is no independent bridge or host process. The supervisor is the only owner of the child PID, session ID, heartbeat, and delivery claims for its runtime.
 
-## State ownership
+## Domain Model
 
-| Concern | Source of truth |
-| --- | --- |
-| Agent rules and role instructions | Markdown charters |
-| Projects, tasks, agents, runs, schedules | SQLite |
-| Human-readable history | append-only event rows and task artifacts |
-| Durable project context | `PROJECT.md`, `STATUS.md`, and `DECISIONS.md` inside each project repository |
-| Terminal output | bounded log captures, never the authoritative state |
+- `Project` registers one durable repository.
+- `TaskSpec` defines objective, task kind, delivery, acceptance, context, risk, and permissions.
+- `Task` tracks the requested outcome.
+- `Agent` records the selected role, provider, model, profile, branch, and lifecycle.
+- `TaskAttempt` represents one execution attempt and never gets reused.
+- `ProcessRuntime` owns one supervisor, provider process, session, and heartbeat.
+- `FleetMessage` and `AgentReply` are claimed outbox records.
+- `Decision` links a human-dependent message to its delivered resolution.
+- `Loop` stores a reusable TaskSpec; `LoopRun` records each execution.
 
-## Safety rules
+State changes pass through explicit transition guards. Terminal records cannot be resurrected. Runtime and attempt binding, runtime singleton ownership, outbox claims, and linked reply creation use SQLite `BEGIN IMMEDIATE` transactions.
 
-- A task that changes code never works directly on `main`.
-- Lifecycle commands are allowlisted operations, not arbitrary text injected into a terminal.
-- `unknown` is safer than guessing whether an agent is idle or complete.
-- Workers are stopped and their terminals closed after a completed run unless explicitly retained for diagnosis.
-- A worker is not complete until its worktree is clean and its local `HEAD` matches the configured upstream branch.
-- A worker is not complete until its pushed branch has a GitHub pull request; merge remains a separate human-authorized action.
-- Completing a worker retires its Codex session and runtime session pointer, but preserves the agent record and lifecycle events for history.
-- Pull request merge remains human-authorized in the initial releases.
+## Delivery Semantics
 
-## Milestones
+Messages are at-least-once attempted and effectively once-claimed. A claim has a consumer, token, timestamp, attempt count, and availability time. Failed sends are released for retry; expired leases are recovered; records become failed after the configured maximum attempts.
 
-1. Persistent project/task/agent registry. Complete.
-2. Git worktree and Windows Terminal adapters. Complete.
-3. Codex CLI adapter with real worker sessions, session bridges, and a single worker concurrency limit. Complete for the first local slice.
-4. Pull request lifecycle and review task type.
-5. Loops, resource policies, and a terminal UI.
+Human-dependent messages create decisions. Queueing a captain reply acknowledges the source message in the same transaction. The message and decision become resolved only after the worker provider confirms delivery.
+
+Terminal agents discard outstanding messages and replies, cancel old decisions, and reject late operational messages into a diagnostic `discarded` state. This prevents stale rows from creating reminder loops.
+
+## Runtime Recovery
+
+Only one active runtime may own a captain workspace or worker agent. Startup claims a `starting` runtime with a compare-and-set on an empty supervisor PID. Heartbeats reject a different PID. Cancellation records intent first and then terminates the exact child process tree.
+
+At captain startup, expired runtimes become failed and their non-terminal agents fail visibly. Legacy captain bridges are terminated only when both their exact Fleet CLI path and legacy command token match.
+
+## Permissions
+
+Execution profiles map task kinds to sandbox and approval settings. Only the captain profile uses `danger-full-access`. Worker profiles are `workspace-write` or `read-only` with non-interactive approvals. A profile must explicitly support the TaskSpec kind before launch.
+
+## Project Memory
+
+SQLite and events are authoritative. `PROJECT.md` and `DECISIONS.md` hold durable knowledge inside the project. `STATUS.md` is regenerated from actual state after lifecycle events and message delivery. Projection failures never fail the underlying task or runtime.
+
+## Pull Requests And Cleanup
+
+Git delivery completes in two phases. A worker first proves commit, push, upstream equality, and PR existence; Fleet moves the task to review and closes the worker runtime/session. Merge reconciliation later matches the exact registered head branch, records the merge once, completes the task when no other agents remain, and idempotently removes the worktree and local Fleet branch.
+
+## Loops And Providers
+
+Manual and scheduled loops use the same TaskSpec, agent, attempt, supervisor, outbox, and completion paths as one-off tasks. Schedules support `@every` intervals and five-field cron.
+
+Providers implement command construction, session discovery, message injection, and session cleanup behind `AgentProviderAdapter`. Codex is the first registered provider. Adding another provider does not change storage or task semantics, but it must implement all required adapter capabilities before Fleet exposes it.
+
+## Testing
+
+Integration tests use temporary real SQLite databases and fake provider/process adapters. They cover migrations, competing claims, linked decisions, terminal hygiene, state transitions, scheduler behavior, runtime ownership, and end-to-end supervisor completion. A separate environment-gated Windows test launches a controlled real child process.

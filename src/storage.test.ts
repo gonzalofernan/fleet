@@ -85,7 +85,11 @@ test("persists prioritized agent messages and delivers them once", () => {
   assert.equal(store.listMessages()[0]?.reminderAt !== null, true);
   assert.equal(store.listMessagesDueForReminder(new Date(Date.now() + 60 * 60_000)).length, 1);
   assert.equal(store.markMessageReminded(message.id).lastRemindedAt !== null, true);
-  assert.equal(store.resolveMessage(message.id).status, "resolved");
+  store.provisionAgent(agent.id, { branch: "fleet/agent-message", worktreePath: home, terminalTitle: "worker" });
+  store.updateAgentStatus(agent.id, "running");
+  const reply = store.queueAgentReply(agent.id, "Do not merge; open a pull request.", message.id);
+  assert.equal(store.markAgentReplyDelivered(reply.id).status, "delivered");
+  assert.equal(store.listMessages().find((entry) => entry.id === message.id)?.status, "resolved");
   assert.equal(store.listMessagesDueForReminder().length, 0);
   store.close();
 });

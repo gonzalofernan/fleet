@@ -6,7 +6,7 @@ Fleet is a local control plane for agents. Runtime state is stored in SQLite; be
 
 1. Read this file and `charters/AGENTS.md`.
 2. Read the role charter assigned to the task.
-3. Read the relevant project context in `projects/`.
+3. Read `PROJECT.md`, `STATUS.md`, and relevant decisions inside the registered project repository.
 4. Load only the skills relevant to the task.
 5. Read the task brief and any decision records it references.
 
@@ -25,7 +25,7 @@ Keep the common contract small. Put role-specific behavior in charters and proce
 
 ## Repository Safety
 
-- Do not modify `main` directly. Use a task worktree and branch for every code change.
+- Do not modify `main` directly. Use the assigned task workspace and use a branch/worktree whenever the TaskSpec delivery mode is `git-pr`.
 - Treat persisted Fleet state as authoritative; terminal text is not proof of lifecycle state.
 - Keep changes focused and do not rewrite unrelated user changes.
 - Record important architectural or operational choices using the decision-record format.
@@ -33,3 +33,4 @@ Keep the common contract small. Put role-specific behavior in charters and proce
 ## Captain Interface
 
 When running as the captain, use the `fleet` CLI as an internal control tool. The human communicates with the captain, not with CLI commands or worker terminals.
+Create an explicit TaskSpec before delegation and link every answer to the worker message it resolves.

@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, normalize, resolve } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 
@@ -40,11 +40,16 @@ export function cleanupCodexSessions(details: {
   const startedAt = Date.parse(details.startedAt);
   const deleted: string[] = [];
   for (const session of findCodexSessions(details.sessionsRoot)) {
-    if (session.cwd !== details.workingDirectory || Number.isNaN(startedAt) || Date.parse(session.timestamp) < startedAt) continue;
+    if (!samePath(session.cwd, details.workingDirectory) || Number.isNaN(startedAt) || Date.parse(session.timestamp) < startedAt) continue;
     const deleteSession = details.deleteSession ?? ((sessionId: string) => deleteCodexSession(details.codexPath, sessionId));
     if (deleteSession(session.id)) deleted.push(session.id);
   }
   return deleted;
+}
+
+function samePath(left: string, right: string): boolean {
+  const comparable = (value: string) => normalize(resolve(value)).replaceAll("/", "\\").toLowerCase();
+  return comparable(left) === comparable(right);
 }
 
 function deleteCodexSession(codexPath: string, sessionId: string): boolean {

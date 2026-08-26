@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -17,6 +17,19 @@ test("initializes a settings file and separated workspace directories", () => {
     assert.equal(existsSync(directory), true);
   }
   assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), settings);
+});
+
+test("persists version 1 settings as normalized version 2 settings", () => {
+  const home = mkdtempSync(join(tmpdir(), "fleet-settings-migration-"));
+  const path = join(home, "settings.json");
+  const current = settingsForWorkspace(join(home, "workspace"));
+  const { defaultProvider: _provider, heartbeatIntervalMs: _heartbeat, runtimeStaleMs: _stale, pullRequestPollMs: _pr,
+    loopPollMs: _loop, autoCleanupWorktrees: _cleanup, ...legacy } = current;
+  writeFileSync(path, `${JSON.stringify({ ...legacy, version: 1 })}\n`, "utf8");
+  const migrated = ensureSettings(path);
+  assert.equal(migrated.version, 2);
+  assert.equal(migrated.defaultProvider, "codex");
+  assert.equal(JSON.parse(readFileSync(path, "utf8")).version, 2);
 });
 
 test("creates explicit project and loop metadata layouts", () => {

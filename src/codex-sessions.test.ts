@@ -25,7 +25,7 @@ test("cleans only sessions created for this Fleet workspace", () => {
   const deleted: string[] = [];
 
   assert.deepEqual(cleanupCodexSessions({
-    workingDirectory: "C:/fleet",
+    workingDirectory: "c:\\FLEET",
     startedAt: "2026-08-25T10:00:00.000Z",
     codexPath: "codex.cmd",
     sessionsRoot: root,

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { FleetSnapshot, Project } from "./domain.js";
 import type { FleetSettings } from "./settings.js";
 
 export interface ProjectContextPaths {
@@ -23,7 +24,9 @@ export function getProjectContextPaths(_settings: FleetSettings, _name: string, 
 export function initializeProjectContext(settings: FleetSettings, name: string, repositoryPath: string): ProjectContextPaths {
   const paths = getProjectContextPaths(settings, name, repositoryPath);
   mkdirSync(paths.directory, { recursive: true });
-  if (!existsSync(paths.project)) writeFileSync(paths.project, buildProjectContext(name, repositoryPath), "utf8");
+  if (!existsSync(paths.project) || isBootstrapPlaceholder(paths.project)) {
+    writeFileSync(paths.project, buildProjectContext(name, repositoryPath), "utf8");
+  }
   if (!existsSync(paths.decisions)) {
     writeFileSync(paths.decisions, `# ${name} decisions\n\nFleet records durable technical decisions here. Keep entries short and include context, decision, and consequences.\n`, "utf8");
   }
@@ -58,6 +61,77 @@ export function refreshProjectStatus(settings: FleetSettings, name: string, repo
     "",
     "- Review active Fleet tasks and open pull requests from the captain.",
     "- Update PROJECT.md only when stable project knowledge changes.",
+  ].join("\n") + "\n", "utf8");
+  return paths;
+}
+
+export function refreshProjectStatusFromFleet(
+  settings: FleetSettings,
+  project: Project,
+  snapshot: FleetSnapshot,
+  activity: string,
+): ProjectContextPaths {
+  const paths = getProjectContextPaths(settings, project.name, project.rootPath);
+  mkdirSync(paths.directory, { recursive: true });
+  const tasks = snapshot.tasks.filter((task) => task.projectId === project.id);
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const agents = snapshot.agents.filter((agent) => taskIds.has(agent.taskId));
+  const pendingMessageIds = new Set(snapshot.decisions.filter((decision) => decision.status === "pending").map((decision) => decision.messageId));
+  const pendingDecisions = snapshot.messages.filter((message) => message.taskId && taskIds.has(message.taskId) && pendingMessageIds.has(message.id));
+  const activeTasks = tasks.filter((task) => ["pending", "ready", "running", "review"].includes(task.status));
+  const recentTasks = [...tasks].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 6);
+  const recentActivity = (snapshot.recentActivity ?? []).filter((entry) => entry.projectName === project.name).slice(0, 8);
+  const branch = runGit(project.rootPath, ["branch", "--show-current"]) || "unknown";
+  const remote = runGit(project.rootPath, ["remote", "get-url", "origin"]) || "not configured";
+  const latestCommit = runGit(project.rootPath, ["log", "-1", "--pretty=format:%h %s"]) || "no commits found";
+  const activeLines = activeTasks.length === 0
+    ? ["- None."]
+    : activeTasks.map((task) => {
+      const taskAgents = agents.filter((agent) => agent.taskId === task.id && !["completed", "failed", "cancelled"].includes(agent.status));
+      const owners = taskAgents.length ? taskAgents.map((agent) => `${agent.role}:${agent.status}`).join(", ") : "no active agent";
+      return `- ${task.status} | ${task.spec.kind}/${task.spec.deliveryMode} | ${task.title} | ${owners}`;
+    });
+  const taskLines = recentTasks.length === 0
+    ? ["- None."]
+    : recentTasks.map((task) => `- ${task.status} | ${task.title} | updated ${task.updatedAt}`);
+  const decisionLines = pendingDecisions.length === 0
+    ? ["- None."]
+    : pendingDecisions.map((message) => `- ${message.priority.toUpperCase()} | ${message.text}`);
+  const activityLines = recentActivity.length === 0
+    ? ["- No recorded activity."]
+    : recentActivity.map((entry) => `- ${entry.createdAt} | ${entry.eventType} ${entry.entityType}`);
+  writeFileSync(paths.status, [
+    `# ${project.name} - Fleet status`,
+    "",
+    "> Generated from Fleet events. SQLite is the source of truth; this file is concise project memory.",
+    "",
+    `- Updated: ${new Date().toISOString()}`,
+    `- Repository: ${project.rootPath}`,
+    `- Branch: ${branch}`,
+    `- Remote: ${remote}`,
+    `- Latest commit: ${latestCommit}`,
+    `- Tasks: ${tasks.length} total, ${activeTasks.length} active`,
+    `- Agents: ${agents.filter((agent) => !["completed", "failed", "cancelled"].includes(agent.status)).length} active`,
+    "",
+    "## Latest outcome",
+    "",
+    activity,
+    "",
+    "## Active work",
+    "",
+    ...activeLines,
+    "",
+    "## Pending decisions",
+    "",
+    ...decisionLines,
+    "",
+    "## Recent tasks",
+    "",
+    ...taskLines,
+    "",
+    "## Recent Fleet events",
+    "",
+    ...activityLines,
   ].join("\n") + "\n", "utf8");
   return paths;
 }
@@ -104,6 +178,14 @@ function buildProjectContext(name: string, repositoryPath: string): string {
     "- STATUS.md is generated and describes the latest operational state.",
     "- Keep this file stable, factual, and short enough to read at the start of a task.",
   ].join("\n") + "\n";
+}
+
+function isBootstrapPlaceholder(path: string): boolean {
+  try {
+    return /^# .+\r?\n\r?\nFleet project metadata\.\r?\n?$/.test(readFileSync(path, "utf8"));
+  } catch {
+    return false;
+  }
 }
 
 function readPackageInfo(repositoryPath: string): string {

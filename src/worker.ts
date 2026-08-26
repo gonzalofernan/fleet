@@ -7,6 +7,7 @@ export interface WorkerPromptOptions {
   fleetCliPath: string;
   controlRoot: string;
   projectContext: ProjectContextPaths;
+  attemptId: string;
 }
 
 export function buildWorkerPrompt(context: AgentContext, options: WorkerPromptOptions): string {
@@ -15,47 +16,68 @@ export function buildWorkerPrompt(context: AgentContext, options: WorkerPromptOp
   const roleInstruction = existsSync(roleCharter)
     ? `Read the role charter at ${resolve(roleCharter)} before acting.`
     : `No dedicated role charter was found for '${context.agent.role}'; follow the task and common Fleet instructions.`;
-  const send = `node "${options.fleetCliPath}" message send --agent "${context.agent.id}" --task "${context.task.id}"`;
+  const messageBase = [
+    `node "${options.fleetCliPath}" message send`,
+    `--agent "${context.agent.id}"`,
+    `--task "${context.task.id}"`,
+    `--attempt "${options.attemptId}"`,
+  ].join(" ");
+  const task = context.task.spec;
 
   return [
-    "You are a Fleet worker agent. The Fleet captain is the human's only operational interface.",
-    "=== FLEET TASK BRIEF (AUTHORITATIVE) ===",
+    "You are a Fleet worker. The Fleet captain is the human's only operational interface.",
+    "=== FLEET TASK SPEC (AUTHORITATIVE) ===",
     `Task id: ${context.task.id}`,
-    `Assigned task: ${context.task.title}`,
-    "This is the assigned task. Do not report that no task brief was provided. Start by acting on it after loading the exact context files below.",
-    "Work autonomously on the assigned task in the current worktree, but report meaningful progress to the captain through Fleet.",
+    `Attempt id: ${options.attemptId}`,
+    `Objective: ${task.objective}`,
+    `Kind: ${task.kind}`,
+    `Delivery mode: ${task.deliveryMode}`,
+    `Risk: ${task.riskLevel}`,
+    `Acceptance criteria:\n${task.acceptanceCriteria.length ? task.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n") : "- Deliver the stated objective and report concrete verification."}`,
+    `Additional context paths:\n${task.contextPaths.length ? task.contextPaths.map((path) => `- ${path}`).join("\n") : "- none"}`,
     `Project: ${context.project.name}`,
-    `Project root: ${context.project.rootPath}`,
-    `Task: ${context.task.title}`,
+    `Repository: ${context.project.rootPath}`,
     `Role: ${context.agent.role}`,
-    `Model: ${context.agent.model}`,
-    `Agent id: ${context.agent.id}`,
+    `Provider/model: ${context.agent.provider}/${context.agent.model}`,
+    `Execution profile: ${context.agent.executionProfile}`,
     `Worktree: ${context.agent.worktreePath ?? "the current working directory"}`,
     `Branch: ${context.agent.branch ?? "the current branch"}`,
     `Fleet control CLI: ${options.fleetCliPath}`,
-    `Fleet project context (authoritative): ${resolve(options.projectContext.project)}`,
-    `Fleet project status (authoritative): ${resolve(options.projectContext.status)}`,
-    `Fleet project decisions (authoritative when relevant): ${resolve(options.projectContext.decisions)}`,
-    `Fleet common instructions (authoritative): ${resolve(join(options.controlRoot, "AGENTS.md"))}`,
-    `Fleet role charter (authoritative): ${resolve(roleCharter)}`,
+    `Project context: ${resolve(options.projectContext.project)}`,
+    `Project status: ${resolve(options.projectContext.status)}`,
+    `Project decisions: ${resolve(options.projectContext.decisions)}`,
+    `Common instructions: ${resolve(join(options.controlRoot, "AGENTS.md"))}`,
+    `Role charter: ${resolve(roleCharter)}`,
     roleInstruction,
-    "Read the three exact Fleet context paths above before acting. Do not substitute the tracked projects/<name>/PROJECT.md for the worktree's generated Fleet context. Do not search for charters/roles/worker.md; the assigned role charter path above is the one to read.",
-    "Do not edit the project's default branch. Do not merge or push changes unless the task explicitly authorizes it.",
-    "Text you write in the Codex conversation is not visible to the Fleet captain as an operational event. Whenever you need a decision, approval, or report a blocker, you must first run the Fleet message command below. Do not only write 'I need confirmation' in the conversation.",
-    "Start by inspecting the relevant project instructions and sending a concise start update.",
-    `Start update: ${send} --type info --text "He empezado la tarea y estoy revisando el contexto."`,
-    "Send another info message when you make a non-obvious technical decision, finish a meaningful milestone, or encounter a meaningful delay.",
-    `Decision/update: ${send} --type info --text "Describe brevemente el avance o la decisión."`,
-    "If you need a human decision or are blocked, stop the affected work and send a message with type approval or blocked before explaining the situation in the conversation. Do not silently guess product requirements.",
-    `Approval request: ${send} --type approval --priority high --text "Explica la decisión que necesita la persona."`,
-    `Blocked report: ${send} --type blocked --priority high --text "Explica el bloqueo y las alternativas."`,
-    "Completion is a delivery gate. Before reporting completion, run the required validation, review git status, commit all intended changes on the current Fleet branch, and push that exact branch with `git push -u origin HEAD`.",
-    "Then create the GitHub pull request from that branch with `gh pr create --fill --head (git branch --show-current)` unless a pull request already exists. Do not merge it.",
-    "Verify that the worktree is clean, local HEAD matches its upstream remote branch, and `gh pr view --json url --jq .url` returns the pull request URL. Only then call the Fleet completion command; do not merely write that the work is done in the Codex conversation.",
-    `Completion command: node "${options.fleetCliPath}" agent complete --id "${context.agent.id}" --message "Resume cambios, validaciones, commit, push y URL de la PR."`,
-    `Completion update: ${send} --type completed --text "Resume cambios, validaciones, commit, push y URL de la PR."`,
-    "Use Spanish for Fleet messages unless the task requires another language. Keep messages concise and include concrete paths, commands, and validation results when useful.",
+    "Read the exact context paths above before acting. PROJECT.md is stable knowledge; STATUS.md is generated operational state; DECISIONS.md contains durable choices.",
+    "The conversation text alone is not an operational event. Use Fleet messaging immediately for progress, questions, approvals, blockers, and completion. Never wait silently for a response after merely writing a question in this terminal.",
+    `Start update: ${messageBase} --type info --dedupe-key "attempt:${options.attemptId}:started" --text "He empezado la tarea y estoy revisando el contexto."`,
+    `Progress update: ${messageBase} --type info --dedupe-key "attempt:${options.attemptId}:milestone:<name>" --text "Describe brevemente el avance y su verificación."`,
+    `Approval request: ${messageBase} --type approval --priority high --dedupe-key "attempt:${options.attemptId}:decision:<name>" --text "Explica la decisión exacta, alternativas y recomendación."`,
+    `Blocked report: ${messageBase} --type blocked --priority high --dedupe-key "attempt:${options.attemptId}:blocker:<name>" --text "Explica el bloqueo, evidencia y alternativas."`,
+    deliveryInstructions(context, options),
+    "Use Spanish for Fleet messages unless the task requires another language. Keep them concise, factual, and specific enough for the captain to act without rereading the terminal.",
   ].join("\n\n");
+}
+
+function deliveryInstructions(context: AgentContext, options: WorkerPromptOptions): string {
+  const completion = `node "${options.fleetCliPath}" agent complete --id "${context.agent.id}" --message`;
+  const completionMessage = `node "${options.fleetCliPath}" message send --agent "${context.agent.id}" --task "${context.task.id}" --attempt "${options.attemptId}" --type completed --dedupe-key "attempt:${options.attemptId}:completed" --text`;
+  if (context.task.spec.deliveryMode === "git-pr") {
+    return [
+      "Delivery gate: run validation, inspect git status, commit all intended changes on the assigned Fleet branch, and push exactly that branch with `git push -u origin HEAD`.",
+      "Create a GitHub pull request with `gh pr create --fill --head (git branch --show-current)` unless one already exists. Never merge it without an explicit instruction.",
+      "Verify the worktree is clean, local HEAD equals the upstream branch, and `gh pr view --json url --jq .url` returns the PR URL.",
+      `${completion} "Resume cambios, validaciones, commit, push y URL de la PR."`,
+      `${completionMessage} "Resume cambios, validaciones, commit, push y URL de la PR."`,
+    ].join("\n");
+  }
+  return [
+    `Delivery gate: this is a ${context.task.spec.deliveryMode} task. Do not create a commit, push, or pull request unless the task explicitly adds that requirement.`,
+    "Produce the requested result, verify it against the acceptance criteria, and include any artifact paths or evidence in the completion summary.",
+    `${completion} "Resume el resultado, criterios verificados, evidencia y rutas de artefactos."`,
+    `${completionMessage} "Resume el resultado, criterios verificados, evidencia y rutas de artefactos."`,
+  ].join("\n");
 }
 
 function safeRole(role: string): string {

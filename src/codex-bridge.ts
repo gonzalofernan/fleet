@@ -42,12 +42,20 @@ export function formatFleetMessageForCaptain(message: FleetMessage, reminder = f
   const source = [message.projectName, message.agentRole, message.taskTitle].filter(Boolean).join(" / ") || "Agente sin contexto";
   return [
     `[FLEET MESSAGE${reminder ? " | REMINDER" : ""}]`,
+    `Message id: ${message.id}`,
+    `Decision id: ${message.decisionId ?? "none"}`,
+    `Agent id: ${message.agentId ?? "none"}`,
+    `Task id: ${message.taskId ?? "none"}`,
+    `Attempt id: ${message.attemptId ?? "none"}`,
     `Origen: ${source}`,
     `Tipo: ${message.type}`,
     `Prioridad: ${message.priority}`,
     `Requiere intervención humana: ${message.requiresHuman ? "sí" : "no"}`,
     "Mensaje del agente:",
     message.text,
+    message.agentId && message.decisionId
+      ? `Para responder: node dist/cli.js agent reply --id "${message.agentId}" --message "${message.id}" --text "<respuesta>"`
+      : "No requiere una respuesta enlazada.",
     "Fin del mensaje Fleet.",
   ].join("\n");
 }
