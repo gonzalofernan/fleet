@@ -1,6 +1,7 @@
 import { spawn as spawnPty, type IPty } from "node-pty";
 import { FleetStore } from "./storage.js";
 import type { FleetMessage } from "./domain.js";
+import { FleetService } from "./service.js";
 
 export interface CaptainHostOptions {
   codexPath: string;
@@ -61,9 +62,23 @@ export function startCaptainHost(options: CaptainHostOptions, createPty = create
       store.markMessageReminded(message.id);
     }
   }, 250);
+  const synchronizePullRequests = () => {
+    const result = new FleetService(store).reconcileMergedPullRequests();
+    for (const reconciled of result.merged) {
+      store.sendMessage({
+        agentId: reconciled.agent.id,
+        taskId: reconciled.task.id,
+        type: "info",
+        text: `PR #${reconciled.merge.number} fusionada externamente: ${reconciled.merge.url}. Agente marcado como completado${reconciled.taskCompleted ? " y tarea completada" : "; la tarea conserva otros agentes activos"}.`,
+      });
+    }
+  };
+  synchronizePullRequests();
+  const pullRequestPoll = setInterval(synchronizePullRequests, 5 * 60_000);
 
   const close = () => {
     clearInterval(poll);
+    clearInterval(pullRequestPoll);
     clearTimeout(startupFallback);
     process.stdin.off("data", onInput);
     if (process.stdin.isTTY) process.stdin.setRawMode?.(false);

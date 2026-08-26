@@ -37,6 +37,7 @@ function execute(command: string[]): object | string {
         "fleet message snooze --id <message-id> --minutes <minutes>",
         "fleet settings",
         "fleet reconcile",
+        "fleet github sync [--project <repository-path>]",
         "fleet captain",
         "fleet dashboard",
         "fleet status",
@@ -117,6 +118,10 @@ function execute(command: string[]): object | string {
   }
   if (command[0] === "reconcile") {
     return new FleetService(store).reconcileProject(process.cwd());
+  }
+  if (command[0] === "github" && command[1] === "sync") {
+    const projectPath = option(command, "--project");
+    return new FleetService(store).reconcileMergedPullRequests(projectPath ? resolve(projectPath) : undefined);
   }
   if (command[0] === "status") {
     if (command[1] === "--view") return renderDashboard(store.snapshot());

@@ -62,6 +62,17 @@ export interface AgentContext {
   project: Project;
 }
 
+export interface PullRequestMerge {
+  agentId: string;
+  taskId: string;
+  number: number;
+  url: string;
+  headRefName: string;
+  baseRefName: string;
+  mergedAt: string;
+  detectedAt: string;
+}
+
 export interface Loop {
   id: string;
   projectId: string | null;

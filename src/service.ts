@@ -1,4 +1,5 @@
 import { GitWorktreeAdapter } from "./adapters/git-worktree.js";
+import { GitHubPullRequestAdapter, type PullRequestLookup } from "./adapters/github-pull-request.js";
 import { WindowsTerminalAdapter } from "./adapters/windows-terminal.js";
 import { existsSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -14,6 +15,7 @@ export class FleetService {
     private readonly worktrees = new GitWorktreeAdapter(),
     private readonly terminals = new WindowsTerminalAdapter(),
     private readonly settings: FleetSettings = ensureSettings(),
+    private readonly pullRequests: PullRequestLookup = new GitHubPullRequestAdapter(),
   ) {}
 
   launchAgent(agentId: string): Agent {
@@ -67,4 +69,48 @@ export class FleetService {
     }
     return recovered;
   }
+
+  reconcileMergedPullRequests(projectRoot?: string): PullRequestReconciliation {
+    const project = projectRoot ? this.store.findProjectByRoot(projectRoot) : null;
+    if (projectRoot && !project) throw new Error(`Unknown project root: ${projectRoot}`);
+    const projects = project ? [project] : this.store.listProjects();
+    const merged: ReconciledPullRequest[] = [];
+    const errors: PullRequestReconciliationError[] = [];
+    const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
+    for (const project of projects) {
+      const agents = this.store.snapshot().agents.filter((agent) => agent.branch && !terminalStatuses.has(agent.status));
+      for (const agent of agents) {
+        const context = this.store.getAgentContext(agent.id);
+        if (context.project.id !== project.id || !agent.branch) continue;
+        try {
+          const pullRequest = this.pullRequests.findMergedPullRequest(project.rootPath, agent.branch);
+          if (!pullRequest) continue;
+          const recorded = this.store.recordPullRequestMerge(agent.id, pullRequest);
+          if (recorded) merged.push({ ...recorded, projectName: project.name });
+        } catch (error) {
+          errors.push({ agentId: agent.id, projectName: project.name, message: error instanceof Error ? error.message : String(error) });
+        }
+      }
+    }
+    return { merged, errors };
+  }
+}
+
+export interface ReconciledPullRequest {
+  projectName: string;
+  merge: { number: number; url: string; mergedAt: string };
+  agent: Agent;
+  task: { id: string; title: string; status: string };
+  taskCompleted: boolean;
+}
+
+export interface PullRequestReconciliationError {
+  agentId: string;
+  projectName: string;
+  message: string;
+}
+
+export interface PullRequestReconciliation {
+  merged: ReconciledPullRequest[];
+  errors: PullRequestReconciliationError[];
 }
