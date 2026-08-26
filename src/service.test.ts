@@ -32,6 +32,25 @@ test("reconciles an exactly matching merged PR and completes its only task agent
   store.close();
 });
 
+test("closes a reviewed task when its already-completed agent PR is merged", () => {
+  const root = mkdtempSync(join(tmpdir(), "fleet-pr-test-"));
+  const store = new FleetStore(join(root, "fleet.db"));
+  const project = store.addProject("fleet", root);
+  const task = store.createTask(project.id, "Review a pull request");
+  const agent = store.requestAgent(task.id, "implementer");
+  store.provisionAgent(agent.id, { branch: "fleet/agent-reviewed", worktreePath: join(root, "worker"), terminalTitle: "worker" });
+  store.markTaskForReview(task.id);
+  store.markAgentCompleted(agent.id);
+  const lookup: PullRequestLookup = { findMergedPullRequest: () => ({ number: 1, url: "https://example.test/pr/1", headRefName: "fleet/agent-reviewed", baseRefName: "main", mergedAt: "2026-08-25T12:00:00Z" }) };
+
+  const result = new FleetService(store, undefined, undefined, settingsForWorkspace(root), lookup).reconcileMergedPullRequests(root);
+
+  assert.equal(result.merged[0]?.taskCompleted, true);
+  assert.equal(store.snapshot().tasks.find((entry) => entry.id === task.id)?.status, "completed");
+  assert.equal(store.hasPullRequestMerge(agent.id), true);
+  store.close();
+});
+
 test("does not complete a task while it has another active agent", () => {
   const root = mkdtempSync(join(tmpdir(), "fleet-pr-test-"));
   const store = new FleetStore(join(root, "fleet.db"));

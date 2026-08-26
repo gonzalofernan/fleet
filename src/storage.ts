@@ -109,6 +109,16 @@ export class FleetStore {
     return task;
   }
 
+  markTaskForReview(taskId: string): Task {
+    const task = this.requireTaskRecord(taskId);
+    if (["completed", "failed", "cancelled"].includes(task.status)) {
+      throw new Error(`Task ${taskId} cannot enter review from ${task.status}`);
+    }
+    this.database.prepare("UPDATE tasks SET status = 'review' WHERE id = ?").run(taskId);
+    this.addEvent("task", taskId, "review_requested", {});
+    return { ...task, status: "review" };
+  }
+
   requestAgent(taskId: string, role: string, provider = "codex", model = recommendModel(role)): Agent {
     this.requireTask(taskId);
     const agent: Agent = {
@@ -232,14 +242,16 @@ export class FleetStore {
     return this.database.prepare("SELECT id, name, root_path AS rootPath, created_at AS createdAt FROM projects ORDER BY created_at").all() as unknown as Project[];
   }
 
+  hasPullRequestMerge(agentId: string): boolean {
+    return Boolean(this.database.prepare("SELECT 1 FROM pull_request_merges WHERE agent_id = ?").get(agentId));
+  }
+
   recordPullRequestMerge(agentId: string, details: Omit<PullRequestMerge, "agentId" | "taskId" | "detectedAt">): { merge: PullRequestMerge; agent: Agent; task: Task; taskCompleted: boolean } | null {
     const context = this.getAgentContext(agentId);
     if (!context.agent.branch || context.agent.branch !== details.headRefName) {
       throw new Error(`Pull request head branch does not match agent ${agentId}`);
     }
-    if (["completed", "cancelled", "failed"].includes(context.agent.status)) return null;
-    const existing = this.database.prepare("SELECT 1 FROM pull_request_merges WHERE agent_id = ?").get(agentId);
-    if (existing) return null;
+    if (["cancelled", "failed"].includes(context.agent.status) || this.hasPullRequestMerge(agentId)) return null;
 
     const detectedAt = now();
     const merge: PullRequestMerge = { agentId, taskId: context.task.id, detectedAt, ...details };
@@ -250,10 +262,14 @@ export class FleetStore {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(merge.agentId, merge.taskId, merge.number, merge.url, merge.headRefName, merge.baseRefName, merge.mergedAt, merge.detectedAt);
       this.database.prepare("UPDATE agents SET status = 'completed' WHERE id = ?").run(agentId);
-      this.addEvent("agent", agentId, "completed_from_pull_request_merge", merge);
+      this.addEvent("agent", agentId, context.agent.status === "completed" ? "pull_request_merge_recorded" : "completed_from_pull_request_merge", merge);
       const remaining = this.database.prepare(`
-        SELECT 1 FROM agents WHERE task_id = ? AND id <> ? AND status NOT IN ('completed', 'failed', 'cancelled') LIMIT 1
-      `).get(context.task.id, agentId);
+        SELECT 1
+        FROM agents a
+        LEFT JOIN pull_request_merges m ON m.agent_id = a.id
+        WHERE a.task_id = ? AND a.status NOT IN ('failed', 'cancelled') AND m.agent_id IS NULL
+        LIMIT 1
+      `).get(context.task.id);
       const taskCompleted = !remaining;
       if (taskCompleted) {
         this.database.prepare("UPDATE tasks SET status = 'completed' WHERE id = ?").run(context.task.id);
@@ -349,6 +365,16 @@ export class FleetStore {
     return { ...context.agent, status: "waiting", ...details };
   }
 
+  markAgentCompleted(agentId: string): Agent {
+    const context = this.getAgentContext(agentId);
+    if (["failed", "cancelled"].includes(context.agent.status)) {
+      throw new Error(`Agent ${agentId} cannot complete from ${context.agent.status}`);
+    }
+    this.database.prepare("UPDATE agents SET status = 'completed' WHERE id = ?").run(agentId);
+    this.addEvent("agent", agentId, "completed", {});
+    return { ...context.agent, status: "completed" };
+  }
+
   close(): void {
     this.database.close();
   }
@@ -363,6 +389,12 @@ export class FleetStore {
     if (!this.database.prepare("SELECT 1 FROM tasks WHERE id = ?").get(id)) {
       throw new Error(`Unknown task: ${id}`);
     }
+  }
+
+  private requireTaskRecord(id: string): Task {
+    const row = this.database.prepare("SELECT id, project_id AS projectId, title, status, created_at AS createdAt FROM tasks WHERE id = ?").get(id) as unknown as Task | undefined;
+    if (!row) throw new Error(`Unknown task: ${id}`);
+    return row;
   }
 
   private requireAgent(id: string): void {

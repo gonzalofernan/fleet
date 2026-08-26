@@ -28,6 +28,7 @@ function execute(command: string[]): object | string {
         "fleet project add <name> --path <repository-path>",
         "fleet project create <name>",
         "fleet task create --project <project-id> --title <title>",
+        "fleet task review <task-id>",
         "fleet agent request --task <task-id> --role <role> [--provider codex]",
         "fleet agent launch <agent-id>",
         "fleet loop create --title <title> --schedule <schedule> [--project <project-id>]",
@@ -119,6 +120,9 @@ function execute(command: string[]): object | string {
   }
   if (command[0] === "reconcile") {
     return new FleetService(store).reconcileProject(process.cwd());
+  }
+  if (command[0] === "task" && command[1] === "review") {
+    return store.markTaskForReview(required(command[2], "task id"));
   }
   if (command[0] === "github" && command[1] === "sync") {
     const projectPath = option(command, "--project");

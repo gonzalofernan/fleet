@@ -39,7 +39,7 @@ The settings file is the configuration source of truth. SQLite remains the runti
 
 The captain is launched through a persistent Captain Host backed by `node-pty`. Worker agents publish structured messages into SQLite with `fleet message send`; the host delivers unread messages to the captain's Codex session as `[FLEET EVENT]` input, including urgent approval requests and blockers.
 
-Fleet also checks GitHub every five minutes while the Captain Host is running. It queries `gh` only for merged PRs whose head branch exactly matches a registered active agent branch, records the PR number, URL and merge timestamp, and then completes the agent. The task is completed only when it has no other active agents. You can run the same check on demand with `fleet github sync` (or restrict it with `--project <repository-path>`).
+Fleet also checks GitHub every five minutes while the Captain Host is running. It queries `gh` only for merged PRs whose head branch exactly matches a registered agent branch, records the PR number, URL and merge timestamp, and then completes the agent. This includes workers already marked `completed` while their task is in `review`, so an external merge closes that review. A task is completed only when every non-cancelled/non-failed worker has persisted merge evidence. You can mark a task for review with `fleet task review <task-id>` and run the same GitHub check on demand with `fleet github sync` (or restrict it with `--project <repository-path>`).
 
 Model routing defaults to GPT-5.6 Luna for the captain and routine work, Terra for implementation and review, and Sol for architecture or high-risk tasks. The captain can override the recommendation per task.
 

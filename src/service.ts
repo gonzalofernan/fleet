@@ -76,12 +76,11 @@ export class FleetService {
     const projects = project ? [project] : this.store.listProjects();
     const merged: ReconciledPullRequest[] = [];
     const errors: PullRequestReconciliationError[] = [];
-    const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
     for (const project of projects) {
-      const agents = this.store.snapshot().agents.filter((agent) => agent.branch && !terminalStatuses.has(agent.status));
+      const agents = this.store.snapshot().agents.filter((agent) => agent.branch && !["failed", "cancelled"].includes(agent.status) && !this.store.hasPullRequestMerge(agent.id));
       for (const agent of agents) {
         const context = this.store.getAgentContext(agent.id);
-        if (context.project.id !== project.id || !agent.branch) continue;
+        if (context.project.id !== project.id || !agent.branch || (agent.status === "completed" && context.task.status !== "review")) continue;
         try {
           const pullRequest = this.pullRequests.findMergedPullRequest(project.rootPath, agent.branch);
           if (!pullRequest) continue;
